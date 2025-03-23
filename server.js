@@ -458,11 +458,11 @@ app.post('/submit',
       });
 
       const mailOptions = {
-        from: `"Mon Refugee Organization" <${process.env.EMAIL_USER}>`,
+        from: `"Form Bot" <${process.env.EMAIL_USER}>`,
         to: email,
-        cc: "taomonlae@gmail.com",
+        cc: "admin@yourdomain.com",
         subject: 'Your Membership Form PDF',
-        text: `Attached is your membership form PDF. Thank you for your contribution. You can also view it online at ${pdfUrl}`,
+        text: `Attached is your membership form PDF. You can also view it online at ${pdfUrl}`,
         attachments: [
           { filename: pdfFilename, path: pdfFilePath },
           { filename: qrCodeFilename, path: qrCodeFilePath }
@@ -532,43 +532,20 @@ app.get('/admin', adminAuth, (req, res) => {
   });
 });
 
-const XLSX = require('xlsx');
-
-// Excel export route
+// CSV export route
 app.get('/export', adminAuth, (req, res) => {
   db.all("SELECT * FROM submissions", (err, rows) => {
     if (err) {
       console.error('Error fetching submissions:', err);
       return res.status(500).send("Internal Server Error");
     }
-
-    // Prepare data for Excel
-    const data = rows.map(row => ({
-      "ID": row.id,
-      "Reference": row.reference,
-      "Full Name": row.fullname,
-      "Email": row.email,
-      "Phone": row.phone,
-      "Date of Birth": row.dob,
-      "Arrival": row.arrival,
-      "Country": row.country,
-      "Ethnicity": row.ethnicity,
-      "Religion": row.religion,
-      // Add additional fields as needed...
-    }));
-
-    // Create a new workbook and worksheet
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.json_to_sheet(data);
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Submissions");
-
-    // Write the workbook to a buffer
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
-
-    // Set headers and send the Excel file
-    res.setHeader("Content-Disposition", "attachment; filename=submissions.xlsx");
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.send(excelBuffer);
+    let csv = "ID,Reference,Full Name,Email,Phone,Date of Birth\n";
+    rows.forEach(row => {
+      csv += `${row.id},"${row.reference}","${row.fullname}","${row.email}","${row.phone}","${row.dob}"\n`;
+    });
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=submissions.csv");
+    res.send(csv);
   });
 });
 
@@ -590,174 +567,7 @@ function adminAuth(req, res, next) {
   }
 }
 
-// Enhanced Admin Panel route with search, filtering, sorting, and pagination
-app.get('/admin', adminAuth, (req, res) => {
-  // Get query parameters for search, sort, and pagination
-  const search = req.query.search || "";
-  const sortField = req.query.sortField || "id";
-  const sortOrder = req.query.sortOrder === "desc" ? "DESC" : "ASC";
-  const page = parseInt(req.query.page, 10) || 1;
-  const pageSize = 10;
-  const offset = (page - 1) * pageSize;
-
-  // Build SQL query with search filtering on fullname or reference
-  const sql = `
-    SELECT * FROM submissions
-    WHERE fullname LIKE ? OR reference LIKE ?
-    ORDER BY ${sortField} ${sortOrder}
-    LIMIT ? OFFSET ?
-  `;
-  const params = [`%${search}%`, `%${search}%`, pageSize, offset];
-
-  db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error('Error fetching submissions:', err);
-      return res.status(500).send("Internal Server Error");
-    }
-
-    // Count total matching rows for pagination
-    db.get(`SELECT COUNT(*) as count FROM submissions WHERE fullname LIKE ? OR reference LIKE ?`, [`%${search}%`, `%${search}%`], (err, countRow) => {
-      if (err) {
-        console.error('Error counting submissions:', err);
-        return res.status(500).send("Internal Server Error");
-      }
-      const total = countRow.count;
-      const totalPages = Math.ceil(total / pageSize);
-
-      // Render admin HTML page with search form, table, and pagination links
-      let html = `
-        <html>
-          <head>
-            <title>Admin Dashboard</title>
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; }
-              table { border-collapse: collapse; width: 100%; }
-              th, td { border: 1px solid #ddd; padding: 8px; }
-              th { background-color: #f2f2f2; cursor: pointer; }
-              .pagination { margin-top: 20px; }
-              .pagination a { margin: 0 5px; text-decoration: none; }
-            </style>
-          </head>
-          <body>
-            <h2>Admin Dashboard - Submissions</h2>
-            <form method="get" action="/admin">
-              <input type="text" name="search" placeholder="Search..." value="${search}">
-              <button type="submit">Search</button>
-            </form>
-            <table>
-              <tr>
-                <th onclick="sortTable('id')">ID</th>
-                <th onclick="sortTable('reference')">Reference</th>
-                <th onclick="sortTable('fullname')">Full Name</th>
-                <th onclick="sortTable('email')">Email</th>
-                <th onclick="sortTable('phone')">Phone</th>
-                <th onclick="sortTable('dob')">Date of Birth</th>
-              </tr>`;
-      rows.forEach(row => {
-        html += `
-              <tr>
-                <td>${row.id}</td>
-                <td>${row.reference}</td>
-                <td>${row.fullname}</td>
-                <td>${row.email}</td>
-                <td>${row.phone}</td>
-                <td>${row.dob}</td>
-              </tr>`;
-      });
-      html += `</table>
-              <div class="pagination">Page: `;
-      for (let i = 1; i <= totalPages; i++) {
-        if (i === page) {
-          html += `<strong>${i}</strong>`;
-        } else {
-          html += `<a href="/admin?search=${search}&sortField=${sortField}&sortOrder=${sortOrder}&page=${i}">${i}</a>`;
-        }
-      }
-      html += `</div>
-              <br><a href="/admin/analytics" target="_blank">View Analytics</a>
-              <br><a href="/export" target="_blank">Export Excel</a>
-              <br><a href="/backup" target="_blank">Backup to Google Sheets</a>
-              <script>
-                function sortTable(field) {
-                  // Toggle sort order if same field
-                  const urlParams = new URLSearchParams(window.location.search);
-                  const currentField = urlParams.get('sortField') || 'id';
-                  const currentOrder = urlParams.get('sortOrder') || 'asc';
-                  let newOrder = 'asc';
-                  if (field === currentField && currentOrder === 'asc') {
-                    newOrder = 'desc';
-                  }
-                  urlParams.set('sortField', field);
-                  urlParams.set('sortOrder', newOrder);
-                  window.location.search = urlParams.toString();
-                }
-              </script>
-          </body>
-        </html>
-      `;
-      res.send(html);
-    });
-  });
-});
-
-// Analytics route with Chart.js to display a simple chart (e.g., submissions per country)
-app.get('/admin/analytics', adminAuth, (req, res) => {
-  // Example: Group submissions by country
-  const sql = `SELECT country, COUNT(*) as count FROM submissions GROUP BY country`;
-  db.all(sql, [], (err, rows) => {
-    if (err) {
-      console.error('Error fetching analytics:', err);
-      return res.status(500).send("Internal Server Error");
-    }
-    const labels = rows.map(r => r.country);
-    const data = rows.map(r => r.count);
-
-    const html = `
-      <html>
-        <head>
-          <title>Analytics</title>
-          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-          </style>
-        </head>
-        <body>
-          <h2>Submissions by Country</h2>
-          <canvas id="myChart" width="400" height="200"></canvas>
-          <script>
-            const ctx = document.getElementById('myChart').getContext('2d');
-            const chart = new Chart(ctx, {
-              type: 'bar',
-              data: {
-                labels: ${JSON.stringify(labels)},
-                datasets: [{
-                  label: 'Number of Submissions',
-                  data: ${JSON.stringify(data)},
-                  backgroundColor: 'rgba(75, 192, 192, 0.6)'
-                }]
-              },
-              options: {
-                responsive: true,
-                scales: {
-                  y: {
-                    beginAtZero: true
-                  }
-                }
-              }
-            });
-          </script>
-          <br><a href="/admin">Back to Dashboard</a>
-        </body>
-      </html>
-    `;
-    res.send(html);
-  });
-});
-
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
-
