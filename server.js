@@ -755,55 +755,6 @@ app.get('/admin/analytics', adminAuth, (req, res) => {
   });
 });
 
-// Google Sheets backup route
-const { google } = require('googleapis');
-app.get('/backup', adminAuth, async (req, res) => {
-  try {
-    // Load client secrets from a local file (you must create credentials.json from your Google Cloud Console)
-    const credentials = JSON.parse(fs.readFileSync('credentials.json'));
-    const { client_secret, client_id, redirect_uris } = credentials.installed;
-    const oAuth2Client = new google.auth.OAuth2(
-      client_id, client_secret, redirect_uris[0]
-    );
-
-    // Set token from environment variable (you must store a valid token in your .env file)
-    oAuth2Client.setCredentials(JSON.parse(process.env.GOOGLE_TOKEN));
-
-    const sheets = google.sheets({ version: 'v4', auth: oAuth2Client });
-    // Assume the spreadsheet ID is stored in .env
-    const spreadsheetId = process.env.SPREADSHEET_ID;
-
-    // Get submissions from DB
-    db.all("SELECT * FROM submissions", async (err, rows) => {
-      if (err) {
-        console.error('Error fetching submissions:', err);
-        return res.status(500).send("Internal Server Error");
-      }
-
-      // Prepare data rows (as arrays) for Google Sheets
-      const header = ["ID", "Reference", "Full Name", "Email", "Phone", "DOB", "Arrival"];
-      const dataRows = rows.map(row => [
-        row.id, row.reference, row.fullname, row.email, row.phone, row.dob, row.arrival
-      ]);
-      const values = [header, ...dataRows];
-
-      // Append data to the sheet (assumes sheet named "Submissions")
-      const result = await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: "Submissions!A1",
-        valueInputOption: "RAW",
-        resource: { values },
-      });
-
-      res.send(`Backup successful! ${result.data.updates.updatedCells} cells updated.`);
-    });
-  } catch (error) {
-    console.error('Error during Google Sheets backup:', error);
-    res.status(500).send('Backup failed.');
-  }
-});
-
-// Admin auth middleware (already defined above)
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
