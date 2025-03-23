@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Mon Refugee Organization Membership Form</title>
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Example country-ethnicity map
+    const ethnicityMap = {
+      "Myanmar": ["Burman", "Chin", "Kachin", "Kayah,Karenni", "Kayin", "Mon", "Rakhine", "Shan", "Other"],
+      "Afghanistan": ["Pashtun", "Tajik", "Hazara", "Uzbek", "Turkmen", "Baloch", "Nuristani", "Other"],
+      "Syria": ["Arab", "Kurd", "Turkmen", "Assyrian", "Armenian", "Other"],
+      "Other": ["N/A"]
+    };
+
+    // Malaysian states for the "Address in Malaysia" dropdown
+    const malaysiaStates = [
+      "Johor",
+      "Kedah",
+      "Kelantan",
+      "Malacca",
+      "Negeri Sembilan",
+      "Pahang",
+      "Penang",
+      "Perak",
+      "Perlis",
+      "Sabah",
+      "Sarawak",
+      "Selangor",
+      "Terengganu",
+      "Kuala Lumpur",
+      "Labuan",
+      "Putrajaya"
+    ];
+
+    function toggleUNHCRDetails() {
+      const status = document.getElementById("unhcr_status").value;
+      const detailsDiv = document.getElementById("unhcr-details");
+      detailsDiv.style.display = (status === "Yes") ? "block" : "none";
+    }
+
+    function updateEthnicity() {
+      const countrySelect = document.getElementById("country");
+      const ethnicitySelect = document.getElementById("ethnicity");
+      const selectedCountry = countrySelect.value;
+      ethnicitySelect.innerHTML = ""; // Clear old options
+
+      const options = ethnicityMap[selectedCountry] || ["N/A"];
+      options.forEach(opt => {
+        const optionEl = document.createElement("option");
+        optionEl.value = opt;
+        optionEl.text = opt;
+        ethnicitySelect.appendChild(optionEl);
+      });
+    }
+
+    function populateMalaysiaStates() {
+      const addressSelect = document.getElementById("address_state");
+      malaysiaStates.forEach(st => {
+        const optionEl = document.createElement("option");
+        optionEl.value = st;
+        optionEl.text = st;
+        addressSelect.appendChild(optionEl);
+      });
+    }
+
+    // Generate repeated fields for additional family members
+    function generateFamilyMembersFields() {
+      const container = document.getElementById("familyMembersContainer");
+      container.innerHTML = ""; // Clear old content
+
+      const num = parseInt(document.getElementById("family_members").value, 10);
+      if (num > 0) {
+        for (let i = 1; i <= num; i++) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "family-member-block";
+          wrapper.innerHTML = `
+            <h4>Family Member #${i}</h4>
+            <label>Full Name:
+              <input type="text" name="fam_${i}_fullname" required>
+            </label>
+            <label>Father Name:
+              <input type="text" name="fam_${i}_father_name">
+            </label>
+            <label>Mother Name:
+              <input type="text" name="fam_${i}_mother_name">
+            </label>
+            <label>Email:
+              <input type="email" name="fam_${i}_email">
+            </label>
+            <label>Phone Number:
+              <input type="text" name="fam_${i}_phone">
+            </label>
+            <label>Second Phone Number (Optional):
+              <input type="text" name="fam_${i}_phone2">
+            </label>
+            <label>Country of Origin:
+              <select name="fam_${i}_country" id="fam_${i}_country">
+                <option value="Myanmar">Myanmar</option>
+                <option value="Afghanistan">Afghanistan</option>
+                <option value="Syria">Syria</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label>Ethnicity:
+              <select name="fam_${i}_ethnicity" id="fam_${i}_ethnicity">
+                <option value="N/A">N/A</option>
+              </select>
+            </label>
+            <label>Religion:
+              <select name="fam_${i}_religion">
+                <option value="Buddhism">Buddhism</option>
+                <option value="Islam">Islam</option>
+                <option value="Christianity">Christianity</option>
+                <option value="Hinduism">Hinduism</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label>Gender:
+              <select name="fam_${i}_gender">
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+            <label>Date of Birth:
+              <input type="date" name="fam_${i}_dob">
+            </label>
+            <label>Date of Arrival in Malaysia:
+              <input type="date" name="fam_${i}_arrival">
+            </label>
+            <label>Address in Malaysia (State):
+              <select name="fam_${i}_address_state">
+                <option value="">Select State</option>
+                ${malaysiaStates.map(st => `<option value="${st}">${st}</option>`).join("")}
+              </select>
+            </label>
+            <label>Vulnerability:
+              <select name="fam_${i}_vulnerability">
+                <option value="N/A">N/A</option>
+                <option value="Single Parent">Single Parent</option>
+                <option value="Medical Needs">Medical Needs</option>
+                <option value="Unaccompanied Minor">Unaccompanied Minor</option>
+                <option value="Other">Other</option>
+              </select>
+            </label>
+          `;
+          container.appendChild(wrapper);
+
+          // For dynamic ethnicity for each family member
+          const famCountrySelect = wrapper.querySelector(`#fam_${i}_country`);
+          const famEthnicitySelect = wrapper.querySelector(`#fam_${i}_ethnicity`);
+          famCountrySelect.addEventListener("change", function () {
+            famEthnicitySelect.innerHTML = "";
+            const selectedCountry = famCountrySelect.value;
+            const options = ethnicityMap[selectedCountry] || ["N/A"];
+            options.forEach(opt => {
+              const optionEl = document.createElement("option");
+              optionEl.value = opt;
+              optionEl.text = opt;
+              famEthnicitySelect.appendChild(optionEl);
+            });
+          });
+        }
+      }
+    }
+
+    function initForm() {
+      // UNHCR toggle
+      document.getElementById("unhcr_status").addEventListener("change", toggleUNHCRDetails);
+      toggleUNHCRDetails(); // Initialize on load
+
+      // Ethnicity
+      document.getElementById("country").addEventListener("change", updateEthnicity);
+      updateEthnicity(); // Initialize
+
+      // Populate Malaysia states
+      populateMalaysiaStates();
+
+      // Additional family logic
+      document.getElementById("family_members").addEventListener("change", generateFamilyMembersFields);
+      generateFamilyMembersFields(); // Initialize
+    }
+
+    window.addEventListener("DOMContentLoaded", initForm);
+  </script>
+</head>
+
+<body>
+  <!-- Header Logo at the top -->
+   <div class="header-logo">
+    <center><img src="logo.png" alt="logo" width="200"></center>
+    </div>
+
+  <h2>Mon Refugee Organization Membership Form</h2>
+  <form action="/submit" method="post" enctype="multipart/form-data">
+    <!-- 1. Reference Number -->
+    <label>Reference Number:
+      <input type="text" name="reference" required>
+    </label><br>
+
+    <!-- 2. UNHCR Registration -->
+    <label>Are you registered with UNHCR?
+      <select name="unhcr_status" id="unhcr_status">
+        <option value="No">Awaiting for registration.</option>
+        <option value="Yes">Yes</option>
+      </select>
+    </label><br>
+    <div id="unhcr-details" style="display: none;">
+      <label>What is your UNHCR file number?
+        <input type="text" name="unhcr_file_number">
+      </label><br>
+      <label>What is your individual number?
+        <input type="text" name="individual_number">
+      </label><br>
+    </div>
+
+    <!-- 3. Full Name -->
+    <label>Full Name:
+      <input type="text" name="fullname" required>
+    </label><br>
+
+    <!-- 4. Father Name -->
+    <label>Father Name:
+      <input type="text" name="father_name">
+    </label><br>
+
+    <!-- 5. Mother Name -->
+    <label>Mother Name:
+      <input type="text" name="mother_name">
+    </label><br>
+
+    <!-- 6. Email -->
+    <label>Email:
+      <input type="email" name="email" required>
+    </label><br>
+
+    <!-- 7. Phone Number -->
+    <label>Phone Number:
+      <input type="text" name="phone" required>
+    </label><br>
+
+    <!-- 8. Second Phone Number (Optional) -->
+    <label>Second Phone Number (Optional):
+      <input type="text" name="phone2">
+    </label><br>
+
+    <!-- 9. Country of Origin -->
+    <label>Country of Origin:
+      <select name="country" id="country">
+        <option value="Myanmar">Myanmar</option>
+        <option value="Afghanistan">Afghanistan</option>
+        <option value="Syria">Syria</option>
+        <option value="Other">Other</option>
+      </select>
+    </label><br>
+
+    <!-- 10. Ethnicity (based on country) -->
+    <label>Ethnicity:
+      <select name="ethnicity" id="ethnicity">
+        <!-- Populated via JS -->
+      </select>
+    </label><br>
+
+    <!-- 11. Religion -->
+    <label>Religion:
+      <select name="religion">
+        <option value="Buddhism">Buddhism</option>
+        <option value="Islam">Islam</option>
+        <option value="Christianity">Christianity</option>
+        <option value="Hinduism">Hinduism</option>
+        <option value="Other">Other</option>
+      </select>
+    </label><br>
+
+    <!-- 12. Gender -->
+    <label>Gender:
+      <select name="gender">
+        <option value="Male">Male</option>
+        <option value="Female">Female</option>
+        <option value="Other">Other</option>
+      </select>
+    </label><br>
+
+    <!-- 13. Date of Birth -->
+    <label>Date of Birth:
+      <input type="date" name="dob" required>
+    </label><br>
+
+    <!-- 14. Date of Arrival in Malaysia -->
+    <label>Date of Arrival in Malaysia:
+      <input type="date" name="arrival" required>
+    </label><br>
+
+    <!-- 15. Address in Malaysia (Dropdown states) -->
+    <label>Address in Malaysia (State):
+      <select name="address_state" id="address_state">
+        <option value="">Select State</option>
+        <!-- Populated in JS from malaysiaStates array -->
+      </select>
+    </label><br>
+
+    <!-- 16. Upload Passport-size Photo -->
+    <label>Upload Passport-size Photo:
+      <input type="file" name="photo" accept="image/*">
+    </label><br>
+
+    <!-- 17. Number of Additional Family Members -->
+    <label>Number of Additional Family Members:
+      <input type="number" name="family_members" id="family_members" value="0" min="0">
+    </label><br>
+    <div id="familyMembersContainer"></div>
+
+    <!-- 18. Vulnerability -->
+    <label>Vulnerability:
+      <select name="vulnerability">
+        <option value="N/A">N/A</option>
+        <option value="Single Parent">Single Parent</option>
+        <option value="Medical Needs">Medical Needs</option>
+        <option value="Unaccompanied Minor">Unaccompanied Minor</option>
+        <option value="Other">Other</option>
+      </select>
+    </label><br>
+
+    <!-- 19. Consent -->
+    <label>
+      <input type="checkbox" name="consent" value="yes" required>
+      I give my consent for data usage
+    </label><br>
+
+    <button type="submit">Submit</button>
+  </form>
+</body>
+
+</html>
