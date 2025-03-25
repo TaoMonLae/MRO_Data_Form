@@ -448,21 +448,29 @@ app.post('/submit',
       // Save the PDF to disk
       fs.writeFileSync(pdfFilePath, pdfBuffer);
 
-      // Create email transporter and send email with PDF and QR code PNG attachments
+      // Create email transporter with explicit SMTP configuration for Gmail
       const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true, // true for port 465, false for 587
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS
-        }
+        },
+        connectionTimeout: 10000,  // 10 seconds
+        greetingTimeout: 10000,
+        socketTimeout: 10000,
+        logger: true,
+        debug: true
       });
 
+
       const mailOptions = {
-        from: `"Form Bot" <${process.env.EMAIL_USER}>`,
+        from: `"Mon Refugee Organization" <${process.env.EMAIL_USER}>`,
         to: email,
-        cc: "admin@yourdomain.com",
-        subject: 'Your Membership Form PDF',
-        text: `Attached is your membership form PDF. You can also view it online at ${pdfUrl}`,
+        cc: "taomonlae@gmail.com",
+        subject: 'Your Membership Application Form',
+        text: `Attached is your membership form PDF. Thank you for your contribution.You can also view it online at ${pdfUrl}`,
         attachments: [
           { filename: pdfFilename, path: pdfFilePath },
           { filename: qrCodeFilename, path: qrCodeFilePath }
