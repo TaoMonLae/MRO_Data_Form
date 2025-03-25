@@ -452,9 +452,9 @@ app.post('/submit',
 
       // Create email transporter with explicit SMTP configuration for Gmail
       const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true, // true for port 465, false for 587
+        host: process.env.EMAIL_HOST,
+        port: parseInt(process.env.EMAIL_PORT),
+        secure: false, // true for port 465, false for 587
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS
@@ -479,7 +479,11 @@ app.post('/submit',
         ]
       };
 
+      console.log("Sending email to:", email);
+      console.log("SMTP user:", process.env.EMAIL_USER);
+
       await transporter.sendMail(mailOptions);
+      console.log("Email sent successfully");
 
       // Send PDF inline in browser
       res.setHeader('Content-Type', 'application/pdf');
