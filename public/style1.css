@@ -1,0 +1,99 @@
+/* Page background and general typography */
+body {
+    background-color: #f4f7fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #333;
+    margin: 0;
+    padding: 0;
+}
+
+/* Container for the form */
+form {
+    background-color: #ffffff;
+    max-width: 800px;
+    margin: 40px auto;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Section headings */
+h1,
+h2,
+h3 {
+    text-align: center;
+    color: #2c3e50;
+    margin-bottom: 20px;
+}
+
+/* Label styling */
+label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+/* Input, select, textarea styling */
+input,
+select,
+textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    box-sizing: border-box;
+    background-color: #fff;
+}
+
+/* Submit button styling */
+button[type="submit"] {
+    background-color: #1976d2;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button[type="submit"]:hover {
+    background-color: #1565c0;
+}
+
+/* File input styling */
+input[type="file"] {
+    padding: 5px;
+    background-color: #f9f9f9;
+    border: 1px solid #ddd;
+}
+
+/* Checkbox styling */
+input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+/* Flex field grouping */
+.field-group {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.field-group .field {
+    flex: 1 1 45%;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .field-group {
+        flex-direction: column;
+    }
+
+    .field-group .field {
+        width: 100%;
+    }
+}

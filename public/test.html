@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Mon Refugee Organization Membership Form</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .form-section {
+      margin-bottom: 30px;
+      padding: 20px;
+      background-color: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    .form-section h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      color: #222;
+      font-size: 18px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 8px;
+    }
+
+    .form-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .form-row label {
+      flex: 1;
+      min-width: 200px;
+    }
+  </style>
+  <script>
+    const ethnicityMap = {
+      "Myanmar": ["Burman", "Chin", "Kachin", "Kayah", "Kayin", "Mon", "Rakhine", "Shan", "Other"],
+      "Afghanistan": ["Pashtun", "Tajik", "Hazara", "Uzbek", "Turkmen", "Baloch", "Nuristani", "Other"],
+      "Syria": ["Arab", "Kurd", "Turkmen", "Assyrian", "Armenian", "Other"],
+      "Other": ["N/A"]
+    };
+
+    const malaysiaStates = [
+      "Johor", "Kedah", "Kelantan", "Malacca", "Negeri Sembilan", "Pahang",
+      "Penang", "Perak", "Perlis", "Sabah", "Sarawak", "Selangor", "Terengganu",
+      "Kuala Lumpur", "Labuan", "Putrajaya"
+    ];
+
+    function toggleUNHCRDetails() {
+      const status = document.getElementById("unhcr_status").value;
+      const detailsDiv = document.getElementById("unhcr-details");
+      detailsDiv.style.display = (status === "Yes") ? "block" : "none";
+    }
+
+    function updateEthnicity() {
+      const countrySelect = document.getElementById("country");
+      const ethnicitySelect = document.getElementById("ethnicity");
+      const selectedCountry = countrySelect.value;
+      ethnicitySelect.innerHTML = "";
+      const options = ethnicityMap[selectedCountry] || ["N/A"];
+      options.forEach(opt => {
+        const optionEl = document.createElement("option");
+        optionEl.value = opt;
+        optionEl.text = opt;
+        ethnicitySelect.appendChild(optionEl);
+      });
+    }
+
+    function populateMalaysiaStates() {
+      const addressSelect = document.getElementById("address_state");
+      malaysiaStates.forEach(st => {
+        const optionEl = document.createElement("option");
+        optionEl.value = st;
+        optionEl.text = st;
+        addressSelect.appendChild(optionEl);
+      });
+    }
+
+    function generateFamilyMembersFields() {
+      const container = document.getElementById("familyMembersContainer");
+      container.innerHTML = "";
+      const num = parseInt(document.getElementById("family_members").value, 10);
+      if (num > 0) {
+        for (let i = 1; i <= num; i++) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "form-section";
+          wrapper.innerHTML = `
+            <h3>Family Member #${i}</h3>
+            <div class="form-row">
+              <label>Full Name:<input type="text" name="fam_${i}_fullname" required></label>
+              <label>Father Name:<input type="text" name="fam_${i}_father_name"></label>
+              <label>Mother Name:<input type="text" name="fam_${i}_mother_name"></label>
+            </div>
+            <div class="form-row">
+              <label>Email:<input type="email" name="fam_${i}_email"></label>
+              <label>Phone Number:<input type="text" name="fam_${i}_phone"></label>
+              <label>Second Phone Number (Optional):<input type="text" name="fam_${i}_phone2"></label>
+            </div>
+            <div class="form-row">
+              <label>Country of Origin:
+                <select name="fam_${i}_country" id="fam_${i}_country">
+                  <option value="Myanmar">Myanmar</option>
+                  <option value="Afghanistan">Afghanistan</option>
+                  <option value="Syria">Syria</option>
+                  <option value="Other">Other</option>
+                </select>
+              </label>
+              <label>Ethnicity:
+                <select name="fam_${i}_ethnicity" id="fam_${i}_ethnicity">
+                  <option value="N/A">N/A</option>
+                </select>
+              </label>
+              <label>Religion:
+                <select name="fam_${i}_religion">
+                  <option value="Buddhism">Buddhism</option>
+                  <option value="Islam">Islam</option>
+                  <option value="Christianity">Christianity</option>
+                  <option value="Hinduism">Hinduism</option>
+                  <option value="Other">Other</option>
+                </select>
+              </label>
+              <label>Gender:
+                <select name="fam_${i}_gender">
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>Date of Birth:<input type="date" name="fam_${i}_dob"></label>
+              <label>Date of Arrival in Malaysia:<input type="date" name="fam_${i}_arrival"></label>
+              <label>Address in Malaysia (State):
+                <select name="fam_${i}_address_state">
+                  <option value="">Select State</option>
+                  ${malaysiaStates.map(st => `<option value="${st}">${st}</option>`).join("")}
+                </select>
+              </label>
+              <label>Vulnerability:
+                <select name="fam_${i}_vulnerability">
+                  <option value="N/A">N/A</option>
+                  <option value="Single Parent">Single Parent</option>
+                  <option value="Medical Needs">Medical Needs</option>
+                  <option value="Unaccompanied Minor">Unaccompanied Minor</option>
+                  <option value="Other">Other</option>
+                </select>
+              </label>
+            </div>
+          `;
+          container.appendChild(wrapper);
+
+          const famCountrySelect = wrapper.querySelector(`#fam_${i}_country`);
+          const famEthnicitySelect = wrapper.querySelector(`#fam_${i}_ethnicity`);
+          famCountrySelect.addEventListener("change", function () {
+            famEthnicitySelect.innerHTML = "";
+            const selectedCountry = famCountrySelect.value;
+            const options = ethnicityMap[selectedCountry] || ["N/A"];
+            options.forEach(opt => {
+              const optionEl = document.createElement("option");
+              optionEl.value = opt;
+              optionEl.text = opt;
+              famEthnicitySelect.appendChild(optionEl);
+            });
+          });
+        }
+      }
+    }
+
+    function initForm() {
+      document.getElementById("unhcr_status").addEventListener("change", toggleUNHCRDetails);
+      toggleUNHCRDetails();
+      document.getElementById("country").addEventListener("change", updateEthnicity);
+      updateEthnicity();
+      populateMalaysiaStates();
+      document.getElementById("family_members").addEventListener("change", generateFamilyMembersFields);
+      generateFamilyMembersFields();
+    }
+    window.addEventListener("DOMContentLoaded", initForm);
+  </script>
+</head>
+
+<body>
+  <div class="header-logo">
+    <img src="logo.png" alt="Logo">
+  </div>
+  <h2>Mon Refugee Organization Membership Form</h2>
+  <form action="/submit" method="post" enctype="multipart/form-data">
+    <!-- Sections inserted here, updated with form-section class -->
+  </form>
+</body>
+
+</html>
