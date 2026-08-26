@@ -59,7 +59,7 @@ React 19 + Node/Express operations workspace for Mon Refugee Organization member
    npm run admin:ensure
    ```
 
-   This is safe to run after migration. It does not change member records or other staff accounts.
+   This is safe to run after migration. It does not change member records or other staff accounts. The administrator must replace this temporary password at the next sign-in.
 
 7. Run the React client and Node API:
 
@@ -95,7 +95,7 @@ Card Printing Staff, Finance Officers, the Chair Person and Administrators can u
 
 Finance Officers, the Chair Person and Administrators can open **Finance records** and import `MRO_Carding_2026_Updated.xlsx`. The importer reads each monthly `*_BankedIn` sheet, keeps the payment date, Concern Person, Concern Person’s number, amount, deduction, net received and notes, and skips duplicates. Because the workbook does not contain payment methods or reliable payment statuses, those values are saved as **Not recorded** for staff to review instead of being guessed.
 
-The available roles are Admin, Chair Person, Secretary, HR, Card Printing Staff, Data Management Staff and Finance Officer. Secretary access is read/print only for member records. HR manages employment profiles such as full-time, part-time, volunteer and contract staff. Admin and Chair Person can access the organization KPI dashboard.
+The available roles are Admin, Chair Person, Secretary, HR, Card Printing Staff, Data Management Staff and Finance Officer. Secretary access is read/print only for member records. HR manages employment profiles such as full-time, part-time, volunteer and contract staff. Admin and Chair Person can access the organization KPI dashboard. Every account created with a temporary password is held at a mandatory password-change screen on first sign-in. Signed-in staff can later update their own password from **Profile & access**; the current session stays active and other sessions are ended. Administrators can edit a staff member’s name, email, role and active status, or delete staff access without erasing historical attendance or audit records. Deactivation immediately ends that account’s sessions; the signed-in account and the last active administrator remain protected.
 
 ## Production
 

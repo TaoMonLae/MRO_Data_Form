@@ -72,9 +72,16 @@ async function initializeDatabase() {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('admin', 'chair', 'secretary', 'hr', 'card_printing', 'data_management', 'finance')),
       active BOOLEAN NOT NULL DEFAULT TRUE,
+      must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+      password_changed_at TIMESTAMPTZ,
+      deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
     CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (LOWER(email));
 

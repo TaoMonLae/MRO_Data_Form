@@ -19,6 +19,7 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const HAS_CLIENT_BUILD = fs.existsSync(path.join(ROOT, 'dist', 'index.html'));
 const SESSION_DAYS = 7;
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+const MIN_PASSWORD_LENGTH = 12;
 
 function environmentNumber(name, fallback) {
   const value = String(process.env[name] ?? '').trim();
@@ -147,6 +148,23 @@ function verifyPassword(password, stored) {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
+function passwordPolicyError(password) {
+  if (password.length < MIN_PASSWORD_LENGTH) return `Use at least ${MIN_PASSWORD_LENGTH} characters for the new password.`;
+  if (password.length > 200) return 'Use a password no longer than 200 characters.';
+  return '';
+}
+
+function userPayload(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    must_change_password: Boolean(row.must_change_password),
+    permissions: ROLE_PERMISSIONS[row.role] || []
+  };
+}
+
 function photoUrl(photoPath) {
   return photoPath ? `/uploads/${encodeURIComponent(path.basename(photoPath))}` : '';
 }
@@ -271,14 +289,16 @@ function auditPayload(row) {
 }
 
 async function seedInitialUser() {
-  const count = await get('SELECT COUNT(*)::int AS count FROM users');
+  const count = await get('SELECT COUNT(*)::int AS count FROM users WHERE deleted_at IS NULL');
   if (count.count) return;
   const email = process.env.INITIAL_ADMIN_EMAIL || (IS_PRODUCTION ? '' : 'chair@mro.local');
   const password = process.env.INITIAL_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : 'Mro2026!');
   const role = process.env.INITIAL_ADMIN_ROLE || 'chair';
   if (email && password) {
-    await run(`INSERT INTO users (name, email, password_hash, role, active, created_at, updated_at)
-      VALUES (?, ?, ?, ?, TRUE, NOW(), NOW()) RETURNING id`,
+    const policyError = passwordPolicyError(password);
+    if (policyError) throw new Error(`INITIAL_ADMIN_PASSWORD: ${policyError}`);
+    await run(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, ?, TRUE, TRUE, NOW(), NOW()) RETURNING id`,
     [process.env.INITIAL_ADMIN_NAME || 'MRO Chair Person', email.toLowerCase(), hashPassword(password), role]);
     console.log(`Initial ${ROLE_LABELS[role]} account created for ${email}`);
   } else {
@@ -297,17 +317,24 @@ async function authenticate(req, res, next) {
     const token = parseCookies(req).mro_session;
     if (!token) return res.status(401).json({ error: 'Please sign in.' });
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const row = await get(`SELECT users.id, users.name, users.email, users.role, users.active
+    const row = await get(`SELECT users.id, users.name, users.email, users.role, users.active, users.must_change_password
       FROM sessions JOIN users ON users.id = sessions.user_id
-      WHERE sessions.token_hash = ? AND sessions.expires_at > NOW()`, [tokenHash]);
+      WHERE sessions.token_hash = ? AND sessions.expires_at > NOW() AND users.deleted_at IS NULL`, [tokenHash]);
     if (!row || !row.active) return res.status(401).json({ error: 'Your session has expired.' });
-    req.user = { ...row, permissions: ROLE_PERMISSIONS[row.role] || [] };
+    req.user = userPayload(row);
+    req.sessionTokenHash = tokenHash;
     next();
   } catch (error) { next(error); }
 }
 
+function requirePasswordChangeComplete(req, res, next) {
+  return req.user.must_change_password
+    ? res.status(403).json({ error: 'Change your temporary password before continuing.', code: 'PASSWORD_CHANGE_REQUIRED' })
+    : next();
+}
+
 function requirePermission(permission) {
-  return [authenticate, (req, res, next) => req.user.permissions.includes(permission)
+  return [authenticate, requirePasswordChangeComplete, (req, res, next) => req.user.permissions.includes(permission)
     ? next()
     : res.status(403).json({ error: 'Your role does not allow this action.' })];
 }
@@ -316,7 +343,7 @@ app.post('/api/auth/login', async (req, res, next) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
-    const user = await get('SELECT * FROM users WHERE LOWER(email) = ? AND active = TRUE', [email]);
+    const user = await get('SELECT * FROM users WHERE LOWER(email) = ? AND active = TRUE AND deleted_at IS NULL', [email]);
     if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: 'Email or password is incorrect.' });
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -326,7 +353,7 @@ app.post('/api/auth/login', async (req, res, next) => {
     res.cookie('mro_session', token, { httpOnly: true, secure: IS_PRODUCTION, sameSite: 'lax', maxAge: SESSION_DAYS * 86400000, path: '/' });
     req.user = user;
     await audit(req, 'Signed in', `${user.name} signed in to the staff portal.`, 'user', user.id);
-    res.json({ id: user.id, name: user.name, email: user.email, role: user.role, permissions: ROLE_PERMISSIONS[user.role] || [] });
+    res.json(userPayload(user));
   } catch (error) { next(error); }
 });
 
@@ -338,6 +365,28 @@ app.get('/api/health', async (_req, res, next) => {
 });
 
 app.get('/api/auth/session', authenticate, (req, res) => res.json(req.user));
+app.post('/api/auth/change-password', authenticate, async (req, res, next) => {
+  try {
+    const currentPassword = String(req.body.current_password || '');
+    const newPassword = String(req.body.new_password || '');
+    const confirmation = String(req.body.confirm_password || '');
+    const policyError = passwordPolicyError(newPassword);
+    if (!currentPassword) return res.status(400).json({ error: 'Enter your temporary or current password.' });
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (newPassword !== confirmation) return res.status(400).json({ error: 'The new passwords do not match.' });
+    const account = await get('SELECT password_hash FROM users WHERE id = ? AND active = TRUE AND deleted_at IS NULL', [req.user.id]);
+    if (!account || !verifyPassword(currentPassword, account.password_hash)) return res.status(401).json({ error: 'The current password is incorrect.' });
+    if (verifyPassword(newPassword, account.password_hash)) return res.status(400).json({ error: 'Choose a password different from the temporary or current password.' });
+    await transaction(async ({ run: txRun }) => {
+      await txRun(`UPDATE users SET password_hash = ?, must_change_password = FALSE, password_changed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [hashPassword(newPassword), req.user.id]);
+      await txRun('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', [req.user.id, req.sessionTokenHash]);
+    });
+    req.user.must_change_password = false;
+    await audit(req, 'Password changed', `${req.user.name} changed their account password.`, 'user', req.user.id);
+    res.json(userPayload(req.user));
+  } catch (error) { next(error); }
+});
 app.post('/api/auth/logout', authenticate, async (req, res, next) => {
   try {
     const token = parseCookies(req).mro_session;
@@ -348,7 +397,7 @@ app.post('/api/auth/logout', authenticate, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.get('/api/dashboard', authenticate, async (req, res, next) => {
+app.get('/api/dashboard', authenticate, requirePasswordChangeComplete, async (req, res, next) => {
   try {
     const mayViewMembers = req.user.permissions.includes('members:view');
     const mayViewFinance = req.user.permissions.includes('finance:view');
@@ -387,12 +436,12 @@ app.get('/api/dashboard', authenticate, async (req, res, next) => {
     const attendanceCoverage = await all(`WITH days AS (
         SELECT generate_series((NOW() AT TIME ZONE 'Asia/Kuala_Lumpur')::date - 6,
           (NOW() AT TIME ZONE 'Asia/Kuala_Lumpur')::date, INTERVAL '1 day')::date AS day
-      ), staff AS (SELECT COUNT(*)::int AS total FROM users WHERE active = TRUE)
+      ), staff AS (SELECT COUNT(*)::int AS total FROM users WHERE active = TRUE AND deleted_at IS NULL)
       SELECT to_char(days.day, 'Dy') AS label, COUNT(DISTINCT attendance.user_id)::int AS value, staff.total
       FROM days CROSS JOIN staff LEFT JOIN attendance ON attendance.work_date = days.day AND attendance.clock_in IS NOT NULL
       GROUP BY days.day, staff.total ORDER BY days.day`);
     const organization = await get(`SELECT
-      (SELECT COUNT(*)::int FROM users WHERE active = TRUE) AS "activeUsers",
+      (SELECT COUNT(*)::int FROM users WHERE active = TRUE AND deleted_at IS NULL) AS "activeUsers",
       (SELECT COUNT(*)::int FROM attendance WHERE work_date = ? AND clock_in IS NOT NULL AND clock_out IS NULL) AS "presentNow",
       (SELECT COUNT(*)::int FROM audit_logs WHERE action = 'UNHCR form printed' AND created_at >= date_trunc('month', NOW())) AS "printedThisMonth"`,
     [malaysiaDate()]);
@@ -408,7 +457,7 @@ app.get('/api/dashboard', authenticate, async (req, res, next) => {
       COUNT(*) FILTER (WHERE payment_status IN ('Pending', 'Partial'))::int AS pending
       FROM finance_records WHERE payment_date >= date_trunc('month', CURRENT_DATE)::date`) : null;
     const workforceKpi = mayViewHr ? await get(`SELECT
-      (SELECT COUNT(*)::int FROM users WHERE active = TRUE) AS "activeStaff",
+      (SELECT COUNT(*)::int FROM users WHERE active = TRUE AND deleted_at IS NULL) AS "activeStaff",
       (SELECT COUNT(*)::int FROM staff_profiles WHERE employment_type = 'part_time') AS "partTimeStaff",
       (SELECT COUNT(DISTINCT user_id)::int FROM attendance WHERE work_date >= date_trunc('month', CURRENT_DATE)::date) AS "activeThisMonth",
       (SELECT ROUND(COALESCE(SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600), 0)::numeric, 1)
@@ -785,14 +834,14 @@ app.put('/api/settings/geofence', ...requirePermission('settings:manage'), async
   } catch (error) { next(error); }
 });
 
-app.get('/api/attendance', authenticate, async (req, res, next) => {
+app.get('/api/attendance', authenticate, requirePasswordChangeComplete, async (req, res, next) => {
   try {
     const geofence = await geofenceSettings();
     const current = await get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, malaysiaDate()]);
     const history = await all('SELECT * FROM attendance WHERE user_id = ? ORDER BY work_date DESC LIMIT 30', [req.user.id]);
     const team = await all(`SELECT users.id AS user_id, users.name, users.role, attendance.clock_in, attendance.clock_out
       FROM users LEFT JOIN attendance ON attendance.user_id = users.id AND attendance.work_date = ?
-      WHERE users.active = TRUE ORDER BY users.name`, [malaysiaDate()]);
+      WHERE users.active = TRUE AND users.deleted_at IS NULL ORDER BY users.name`, [malaysiaDate()]);
     res.json({
       current: current ? { ...attendancePayload(current), status: current.clock_in && !current.clock_out ? 'clocked_in' : 'clocked_out' } : null,
       history: history.map(attendancePayload),
@@ -802,7 +851,7 @@ app.get('/api/attendance', authenticate, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post('/api/attendance/location-check', authenticate, async (req, res, next) => {
+app.post('/api/attendance/location-check', authenticate, requirePasswordChangeComplete, async (req, res, next) => {
   try {
     const result = await verifiedClockLocation(req.body.location);
     res.json({
@@ -814,7 +863,7 @@ app.post('/api/attendance/location-check', authenticate, async (req, res, next) 
   } catch (error) { next(error); }
 });
 
-app.post('/api/attendance/clock', authenticate, async (req, res, next) => {
+app.post('/api/attendance/clock', authenticate, requirePasswordChangeComplete, async (req, res, next) => {
   try {
     const action = req.body.action;
     const { location } = await verifiedClockLocation(req.body.location);
@@ -1121,7 +1170,7 @@ app.get('/api/hr/staff', ...requirePermission('hr:view'), async (_req, res, next
           COUNT(*) FILTER (WHERE work_date >= date_trunc('month', CURRENT_DATE)::date AND clock_in IS NOT NULL AND clock_out IS NOT NULL) AS completed_shifts,
           SUM(EXTRACT(EPOCH FROM (clock_out - clock_in)) / 3600) FILTER (WHERE work_date >= date_trunc('month', CURRENT_DATE)::date AND clock_out IS NOT NULL) AS hours_this_month
         FROM attendance WHERE attendance.user_id = users.id
-      ) kpi ON TRUE ORDER BY users.active DESC, users.name`);
+      ) kpi ON TRUE WHERE users.deleted_at IS NULL ORDER BY users.active DESC, users.name`);
     res.json({ staff });
   } catch (error) { next(error); }
 });
@@ -1132,7 +1181,7 @@ app.put('/api/hr/staff/:userId', ...requirePermission('hr:edit'), async (req, re
     const allowedTypes = ['full_time', 'part_time', 'volunteer', 'contract'];
     const targetHours = Math.max(1, Math.min(168, cleanMoney(req.body.weekly_target_hours || 40)));
     if (!allowedTypes.includes(employmentType)) return res.status(400).json({ error: 'Choose a valid employment type.' });
-    const target = await get('SELECT id, name FROM users WHERE id = ?', [req.params.userId]);
+    const target = await get('SELECT id, name FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.userId]);
     if (!target) return res.status(404).json({ error: 'Staff account not found.' });
     await run(`INSERT INTO staff_profiles (user_id, employment_type, job_title, department, start_date, weekly_target_hours, notes, updated_at, updated_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
@@ -1148,7 +1197,8 @@ app.put('/api/hr/staff/:userId', ...requirePermission('hr:edit'), async (req, re
 
 app.get('/api/users', ...requirePermission('users:manage'), async (_req, res, next) => {
   try {
-    const users = await all('SELECT id, name, email, role, active, created_at FROM users ORDER BY active DESC, name');
+    const users = await all(`SELECT id, name, email, role, active, must_change_password, created_at
+      FROM users WHERE deleted_at IS NULL ORDER BY active DESC, name`);
     res.json({ users: users.map(user => ({ ...user, created_at: displayTimestamp(user.created_at), access_summary: roleSummary(user.role) })) });
   } catch (error) { next(error); }
 });
@@ -1161,9 +1211,13 @@ app.post('/api/users', ...requirePermission('users:manage'), async (req, res, ne
   try {
     const name = String(req.body.name || '').trim(); const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || ''); const role = String(req.body.role || '');
-    if (!name || !email.includes('@') || password.length < 8 || !ROLE_LABELS[role]) return res.status(400).json({ error: 'Name, valid email, role and an 8-character password are required.' });
+    const policyError = passwordPolicyError(password);
+    if (!name || !email.includes('@') || !ROLE_LABELS[role]) return res.status(400).json({ error: 'Name, valid email and role are required.' });
+    if (role === 'admin' && req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can create another administrator.' });
+    if (policyError) return res.status(400).json({ error: policyError.replace('new password', 'temporary password') });
     const now = new Date();
-    const result = await run('INSERT INTO users (name, email, password_hash, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, TRUE, ?, ?) RETURNING id', [name, email, hashPassword(password), role, now, now]);
+    const result = await run(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
+      VALUES (?, ?, ?, ?, TRUE, TRUE, ?, ?) RETURNING id`, [name, email, hashPassword(password), role, now, now]);
     await audit(req, 'Staff account created', `${name} · ${ROLE_LABELS[role]}`, 'user', result.lastID);
     res.status(201).json({ id: result.lastID });
   } catch (error) { if (error.code === '23505') return res.status(409).json({ error: 'A user with that email already exists.' }); next(error); }
@@ -1171,11 +1225,59 @@ app.post('/api/users', ...requirePermission('users:manage'), async (req, res, ne
 
 app.put('/api/users/:id', ...requirePermission('users:manage'), async (req, res, next) => {
   try {
-    const role = String(req.body.role || ''); if (!ROLE_LABELS[role]) return res.status(400).json({ error: 'Choose a valid role.' });
-    const target = await get('SELECT * FROM users WHERE id = ?', [req.params.id]); if (!target) return res.status(404).json({ error: 'User not found.' });
-    await run('UPDATE users SET role = ?, updated_at = ? WHERE id = ?', [role, new Date(), req.params.id]);
-    await audit(req, 'Staff role updated', `${target.name}: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`, 'user', target.id);
-    res.json({ id: target.id });
+    const target = await get('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]); if (!target) return res.status(404).json({ error: 'User not found.' });
+    const editingAccountDetails = ['name', 'email', 'active'].some(field => Object.prototype.hasOwnProperty.call(req.body, field));
+    if (editingAccountDetails && req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can edit staff account details.' });
+    const name = Object.prototype.hasOwnProperty.call(req.body, 'name') ? String(req.body.name || '').trim() : target.name;
+    const email = Object.prototype.hasOwnProperty.call(req.body, 'email') ? String(req.body.email || '').trim().toLowerCase() : target.email;
+    const role = Object.prototype.hasOwnProperty.call(req.body, 'role') ? String(req.body.role || '') : target.role;
+    const active = typeof req.body.active === 'boolean' ? req.body.active : Boolean(target.active);
+    if (!name || name.length > 160) return res.status(400).json({ error: 'Enter a staff name no longer than 160 characters.' });
+    if (!email.includes('@') || email.length > 254) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (!ROLE_LABELS[role]) return res.status(400).json({ error: 'Choose a valid role.' });
+    if (req.user.role !== 'admin' && (target.role === 'admin' || role === 'admin')) {
+      return res.status(403).json({ error: 'Only an administrator can assign or change administrator access.' });
+    }
+    if (Number(target.id) === Number(req.user.id) && !active) return res.status(409).json({ error: 'You cannot deactivate the account you are currently using.' });
+    if (target.role === 'admin' && target.active && (role !== 'admin' || !active)) {
+      const otherAdmins = await get(`SELECT COUNT(*)::int AS count FROM users
+        WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [target.id]);
+      if (!otherAdmins.count) return res.status(409).json({ error: 'Assign another active administrator before changing or deactivating the last administrator.' });
+    }
+    await transaction(async ({ run: txRun }) => {
+      await txRun('UPDATE users SET name = ?, email = ?, role = ?, active = ?, updated_at = NOW() WHERE id = ?', [name, email, role, active, target.id]);
+      if (!active) await txRun('DELETE FROM sessions WHERE user_id = ?', [target.id]);
+    });
+    const changes = [];
+    if (name !== target.name) changes.push(`name: ${target.name} → ${name}`);
+    if (email !== target.email) changes.push(`email: ${target.email} → ${email}`);
+    if (role !== target.role) changes.push(`role: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`);
+    if (active !== Boolean(target.active)) changes.push(active ? 'account reactivated' : 'account deactivated');
+    await audit(req, 'Staff account updated', `${name} · ${changes.join('; ') || 'details saved without changes'}`, 'user', target.id);
+    const updated = await get('SELECT * FROM users WHERE id = ?', [target.id]);
+    res.json({ user: userPayload(updated), record: { id: updated.id, name: updated.name, email: updated.email, role: updated.role, active: Boolean(updated.active), must_change_password: Boolean(updated.must_change_password), access_summary: roleSummary(updated.role) } });
+  } catch (error) { if (error.code === '23505') return res.status(409).json({ error: 'A user with that email already exists.' }); next(error); }
+});
+
+app.delete('/api/users/:id', ...requirePermission('users:manage'), async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can delete staff accounts.' });
+    const target = await get('SELECT id, name, email, role, active FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'User not found.' });
+    if (Number(target.id) === Number(req.user.id)) return res.status(409).json({ error: 'You cannot delete the account you are currently using.' });
+    if (target.role === 'admin' && target.active) {
+      const otherAdmins = await get(`SELECT COUNT(*)::int AS count FROM users
+        WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [target.id]);
+      if (!otherAdmins.count) return res.status(409).json({ error: 'Create another active administrator before deleting the last administrator.' });
+    }
+    const redactedEmail = `deleted+${target.id}.${Date.now()}@mro.invalid`;
+    await transaction(async ({ run: txRun }) => {
+      await txRun(`UPDATE users SET email = ?, active = FALSE, must_change_password = FALSE, deleted_at = NOW(), updated_at = NOW()
+        WHERE id = ?`, [redactedEmail, target.id]);
+      await txRun('DELETE FROM sessions WHERE user_id = ?', [target.id]);
+    });
+    await audit(req, 'Staff account deleted', `${target.name} · ${ROLE_LABELS[target.role]} · access revoked; historical records retained.`, 'user', target.id);
+    res.status(204).end();
   } catch (error) { next(error); }
 });
 

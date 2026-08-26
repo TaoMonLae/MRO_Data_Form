@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Activity, Archive, ArrowRight, BadgeCheck, BarChart3, Bell, BookOpen, BriefcaseBusiness,
+  Activity, Archive, ArrowRight, BarChart3, Bell, BookOpen, BriefcaseBusiness,
   Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Database,
   Download, ExternalLink, FileCheck2, FileDown, FileText, Filter, Globe2, HandHeart,
   HeartHandshake, Home, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Mail, MapPin,
   Menu, Moon, MoreHorizontal, Pencil, Plus, Printer, RefreshCw, Search, Settings, ShieldCheck,
-  Sparkles, Sun, Upload, UserCog, UserRound, Users, Workflow, X, CheckCircle2, AlertTriangle
+  Sparkles, Sun, Trash2, Upload, UserCog, UserRound, Users, Workflow, X, CheckCircle2, AlertTriangle
 } from 'lucide-react';
 import { api } from './api';
 import Threads from './components/reactbits/Threads';
@@ -370,9 +370,56 @@ function LoginPage({ onLogin }) {
         <label>Email address<input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="username" required /></label>
         <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></label>
         <Button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'}</Button>
-        <div className="login-access-note"><BadgeCheck size={16} /><span><strong>Administrator locked out?</strong><br />Run <code>npm run admin:ensure</code> from the project folder.</span></div>
         <p className="login-help"><CircleHelp size={15} /> Need access? Contact the MRO administrator.</p>
         <NavLink className="login-home-link" to="/"><ArrowRight size={15} /> Return to the MRO website</NavLink>
+      </form>
+    </section>
+  </main>;
+}
+
+function FirstLoginPasswordPage({ user, onChanged, onLogout }) {
+  const [form, setForm] = useState({ current_password: '', new_password: '', confirm_password: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const longEnough = form.new_password.length >= 12;
+  const changed = Boolean(form.new_password) && form.new_password !== form.current_password;
+  const matches = Boolean(form.confirm_password) && form.new_password === form.confirm_password;
+
+  async function submit(event) {
+    event.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const updated = await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify(form) });
+      onChanged(updated);
+    } catch (requestError) { setError(requestError.message); }
+    finally { setBusy(false); }
+  }
+
+  return <main className="login-page password-change-page">
+    <section className="login-story" aria-label="Account security">
+      <div className="login-threads"><Threads color={[1, 0.76, 0.05]} amplitude={0.42} distance={0.2} /></div>
+      <div className="login-story__content">
+        <div className="brand-lockup brand-lockup--inverse"><img src="/assets/mro-logo.png" alt="Mon Refugee Organization" /><span><strong>MRO Registry</strong><small>Protected staff access</small></span></div>
+        <div className="login-copy"><p className="kicker">First sign-in</p><h1>Make this account yours.</h1><p>Your temporary password has opened the door once. Replace it now before entering the registry.</p><div className="trust-line"><LockKeyhole size={18} /> One required security step · No registry access until complete</div></div>
+        <p className="login-note">Your administrator cannot see the password you choose.</p>
+      </div>
+    </section>
+    <section className="login-panel">
+      <ThemeToggle className="theme-toggle--login" />
+      <form className="login-form password-change-form" onSubmit={submit}>
+        <div className="password-change-form__identity"><span className="avatar">{initials(user.name)}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></div>
+        <p className="kicker">Account security</p><h2>Choose a new password</h2><p className="muted">This replaces the temporary password issued by your administrator.</p>
+        {error && <div className="form-alert" role="alert"><AlertTriangle size={17} />{error}</div>}
+        <label>Temporary password<input type="password" value={form.current_password} onChange={e => setForm({ ...form, current_password: e.target.value })} autoComplete="current-password" required autoFocus /></label>
+        <label>New password<input type="password" minLength="12" maxLength="200" value={form.new_password} onChange={e => setForm({ ...form, new_password: e.target.value })} autoComplete="new-password" required /></label>
+        <label>Confirm new password<input type="password" minLength="12" maxLength="200" value={form.confirm_password} onChange={e => setForm({ ...form, confirm_password: e.target.value })} autoComplete="new-password" required /></label>
+        <div className="password-rules" aria-live="polite">
+          <span className={longEnough ? 'is-valid' : ''}><CheckCircle2 /> At least 12 characters</span>
+          <span className={changed ? 'is-valid' : ''}><CheckCircle2 /> Different from the temporary password</span>
+          <span className={matches ? 'is-valid' : ''}><CheckCircle2 /> Both new-password fields match</span>
+        </div>
+        <Button type="submit" disabled={busy || !longEnough || !changed || !matches}>{busy ? 'Saving password…' : 'Save password and continue'}</Button>
+        <button className="password-signout" type="button" onClick={onLogout}><LogOut size={15} /> Sign out instead</button>
       </form>
     </section>
   </main>;
@@ -592,7 +639,15 @@ function AdminDashboardPage({ user, showToast }) {
   </>;
 }
 
-function ProfilePage({ user }) {
+function ProfilePage({ user, showToast }) {
+  const emptyPasswordForm = { current_password: '', new_password: '', confirm_password: '' };
+  const [passwordForm, setPasswordForm] = useState(emptyPasswordForm);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const longEnough = passwordForm.new_password.length >= 12;
+  const changed = Boolean(passwordForm.new_password) && passwordForm.new_password !== passwordForm.current_password;
+  const matches = Boolean(passwordForm.confirm_password) && passwordForm.new_password === passwordForm.confirm_password;
   const permissionLabels = {
     'members:view': 'View member records', 'members:edit': 'Edit member records', 'members:import': 'Import spreadsheets',
     'members:export': 'Export spreadsheets', 'print:forms': 'Generate member forms', 'finance:view': 'View finance records',
@@ -600,10 +655,45 @@ function ProfilePage({ user }) {
     'carding:view': 'View daily carding ledger', 'carding:edit': 'Manage carding and expenses',
     'settings:manage': 'Manage office location lock', 'users:manage': 'Manage users & roles', 'audit:view': 'Review audit activity'
   };
+
+  async function changePassword(event) {
+    event.preventDefault();
+    setPasswordError(''); setPasswordSuccess(''); setPasswordBusy(true);
+    try {
+      await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify(passwordForm) });
+      setPasswordForm(emptyPasswordForm);
+      setPasswordSuccess('Password updated. Other signed-in sessions were ended to protect this account.');
+      showToast?.('Password updated securely.');
+    } catch (requestError) { setPasswordError(requestError.message); }
+    finally { setPasswordBusy(false); }
+  }
+
   return <><section className="profile-hero"><div className="profile-identity"><span className="profile-avatar">{initials(user.name)}</span><div><p className="kicker">Staff profile</p><h2>{user.name}</h2><p>{user.email}</p></div></div><StatusBadge tone="success">Active account</StatusBadge></section>
     <div className="profile-layout"><section className="panel profile-panel"><div className="panel-heading"><div><p className="kicker">Role assignment</p><h3>{ROLE_LABELS[user.role]}</h3></div><ShieldCheck /></div><div className="profile-role-copy"><p>{roleSummary(user.role)}</p><dl><div><dt>Workspace</dt><dd>MRO Registry</dd></div><div><dt>Time zone</dt><dd>Asia/Kuala_Lumpur</dd></div><div><dt>Account ID</dt><dd className="mono">{user.id}</dd></div></dl></div></section>
       <section className="panel profile-panel"><div className="panel-heading"><div><p className="kicker">Access scope</p><h3>What this account can do</h3></div><KeyRound /></div><div className="permission-list">{Object.entries(permissionLabels).map(([permission, label]) => <div key={permission} className={user.permissions.includes(permission) ? 'permission permission--granted' : 'permission'}>{user.permissions.includes(permission) ? <Check /> : <X />}<span>{label}</span><small>{user.permissions.includes(permission) ? 'Granted' : 'Not granted'}</small></div>)}</div></section>
-    </div><section className="profile-safety"><LockKeyhole /><div><h3>Protect this account</h3><p>Use an individual password, sign out on shared computers and report unexpected activity to the administrator.</p></div></section></>;
+    </div>
+    <section className="panel profile-password-panel">
+      <div className="panel-heading"><div><p className="kicker">Account security</p><h3>Password &amp; sessions</h3></div><LockKeyhole /></div>
+      <div className="profile-password-layout">
+        <div className="profile-password-copy"><span className="profile-password-icon"><ShieldCheck /></span><h4>Keep this account personal</h4><p>Verify your current password, then choose a replacement that you do not use elsewhere.</p><small>After the change, this device stays signed in and other signed-in sessions are ended.</small></div>
+        <form className="profile-password-form" onSubmit={changePassword}>
+          {passwordError && <div className="form-alert" role="alert"><AlertTriangle size={17} />{passwordError}</div>}
+          {passwordSuccess && <div className="form-success" role="status"><CheckCircle2 size={17} />{passwordSuccess}</div>}
+          <div className="profile-password-fields">
+            <Field label="Current password" required><input type="password" value={passwordForm.current_password} onChange={event => setPasswordForm({ ...passwordForm, current_password: event.target.value })} autoComplete="current-password" required /></Field>
+            <Field label="New password" required><input type="password" minLength="12" maxLength="200" value={passwordForm.new_password} onChange={event => setPasswordForm({ ...passwordForm, new_password: event.target.value })} autoComplete="new-password" required /></Field>
+            <Field label="Confirm new password" required><input type="password" minLength="12" maxLength="200" value={passwordForm.confirm_password} onChange={event => setPasswordForm({ ...passwordForm, confirm_password: event.target.value })} autoComplete="new-password" required /></Field>
+          </div>
+          <div className="password-rules" aria-live="polite">
+            <span className={longEnough ? 'is-valid' : ''}><CheckCircle2 /> At least 12 characters</span>
+            <span className={changed ? 'is-valid' : ''}><CheckCircle2 /> Different from the current password</span>
+            <span className={matches ? 'is-valid' : ''}><CheckCircle2 /> Both new-password fields match</span>
+          </div>
+          <div className="profile-password-actions"><Button type="submit" icon={KeyRound} disabled={passwordBusy || !passwordForm.current_password || !longEnough || !changed || !matches}>{passwordBusy ? 'Updating password…' : 'Update password'}</Button></div>
+        </form>
+      </div>
+    </section>
+  </>;
 }
 
 function ImportReviewModal({ preview, type = 'members', committing, onClose, onCommit }) {
@@ -758,7 +848,7 @@ function MemberDrawer({ member, canEdit, canPrint, onClose, onSave }) {
 }
 
 function FormSection({ title, children }) { return <section className="form-section"><h3>{title}</h3>{children}</section>; }
-function Field({ label, required, children }) { return <label className="field"><span>{label}{required && <em>*</em>}</span>{children}</label>; }
+function Field({ label, required, hint, children }) { return <label className="field"><span>{label}{required && <em>*</em>}</span>{hint && <small>{hint}</small>}{children}</label>; }
 
 function AttendancePage({ showToast }) {
   const { data, loading, error, reload: load } = useApiResource('/api/attendance');
@@ -901,17 +991,59 @@ function HrPage({ showToast }) {
   </>;
 }
 
-function UsersPage({ showToast }) {
+function UsersPage({ currentUser, showToast, onCurrentUserUpdated }) {
   const { data, loading, error, reload: load } = useApiResource('/api/users');
-  const users = data?.users || []; const [open, setOpen] = useState(false); const [form, setForm] = useState({ name: '', email: '', role: 'data_management', password: '' });
+  const users = data?.users || [];
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', role: 'data_management', password: '' });
+  const [editingUser, setEditingUser] = useState(null);
+  const [savingUser, setSavingUser] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const assignableRoles = Object.entries(ROLE_LABELS).filter(([key]) => currentUser.role === 'admin' || key !== 'admin');
   if (loading && !data) return <PageState loading title="Users and roles" />;
   if (error && !data) return <PageState title="Users and roles unavailable" message={error} onRetry={load} />;
-  async function add(event) { event.preventDefault(); try { await api('/api/users', { method: 'POST', body: JSON.stringify(form) }); showToast('User account created.'); setOpen(false); setForm({ name: '', email: '', role: 'data_management', password: '' }); load(); } catch (error) { showToast(error.message, 'error'); } }
-  async function updateRole(id, role) { try { await api(`/api/users/${id}`, { method: 'PUT', body: JSON.stringify({ role }) }); showToast('User role updated.'); load(); } catch (error) { showToast(error.message, 'error'); } }
+  async function add(event) {
+    event.preventDefault();
+    try {
+      await api('/api/users', { method: 'POST', body: JSON.stringify(form) });
+      showToast('User created. They must change the temporary password at first sign-in.');
+      setOpen(false); setForm({ name: '', email: '', role: 'data_management', password: '' }); load();
+    } catch (error) { showToast(error.message, 'error'); }
+  }
+  async function saveUser(event) {
+    event.preventDefault();
+    if (!editingUser) return;
+    setSavingUser(true);
+    const body = currentUser.role === 'admin'
+      ? { name: editingUser.name, email: editingUser.email, role: editingUser.role, active: Boolean(editingUser.active) }
+      : { role: editingUser.role };
+    try {
+      const result = await api(`/api/users/${editingUser.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      if (Number(editingUser.id) === Number(currentUser.id)) onCurrentUserUpdated?.(result.user);
+      showToast(`${editingUser.name}'s account was updated.`);
+      setEditingUser(null); load();
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { setSavingUser(false); }
+  }
+  function closeDelete() { setPendingDelete(null); setDeleteConfirmation(''); }
+  async function deleteUser() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await api(`/api/users/${pendingDelete.id}`, { method: 'DELETE' });
+      showToast(`${pendingDelete.name}'s access was deleted. Historical records were retained.`);
+      closeDelete(); load();
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { setDeleting(false); }
+  }
   return <><section className="page-title-row"><div><p className="kicker">Access control</p><h2>Users & roles</h2><p>Give each staff member only the access required for their work.</p></div><Button icon={Plus} onClick={() => setOpen(true)}>Add user</Button></section>
-    <section className="panel"><div className="panel-heading"><div><p className="kicker">Active access</p><h3>Staff accounts</h3></div><StatusBadge>{users.length} users</StatusBadge></div><div className="table-scroll"><table className="data-table"><thead><tr><th>User</th><th>Role</th><th>Access summary</th><th>Status</th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><div className="member-cell"><span className="avatar avatar--small">{initials(user.name)}</span><span><strong>{user.name}</strong><small>{user.email}</small></span></div></td><td><select className="table-select" value={user.role} onChange={e => updateRole(user.id, e.target.value)}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></td><td>{user.access_summary}</td><td><StatusBadge tone={user.active ? 'success' : 'neutral'}>{user.active ? 'Active' : 'Inactive'}</StatusBadge></td></tr>)}</tbody></table></div></section>
+    <section className="panel"><div className="panel-heading"><div><p className="kicker">Active access</p><h3>Staff accounts</h3></div><StatusBadge>{users.length} users</StatusBadge></div><div className="table-scroll"><table className="data-table users-table"><thead><tr><th>User</th><th>Role</th><th>Access summary</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><div className="member-cell"><span className="avatar avatar--small">{initials(user.name)}</span><span><strong>{user.name}{Number(user.id) === Number(currentUser.id) && <small className="current-user-label">You</small>}</strong><small>{user.email}</small></span></div></td><td><strong className="user-role-label">{ROLE_LABELS[user.role]}</strong></td><td>{user.access_summary}</td><td>{!user.active ? <StatusBadge>Inactive</StatusBadge> : user.must_change_password ? <StatusBadge tone="warning">Password change pending</StatusBadge> : <StatusBadge tone="success">Active</StatusBadge>}</td><td className="table-action-cell"><div className="user-row-actions"><button className="icon-action" type="button" onClick={() => setEditingUser({ id: user.id, name: user.name, email: user.email, role: user.role, active: Boolean(user.active) })} disabled={currentUser.role !== 'admin' && user.role === 'admin'} title={currentUser.role !== 'admin' && user.role === 'admin' ? 'Only an administrator can edit this account' : `Edit ${user.name}`} aria-label={`Edit ${user.name}`}><Pencil size={16} /></button>{currentUser.role === 'admin' && <button className="icon-action icon-action--danger" type="button" onClick={() => { setPendingDelete(user); setDeleteConfirmation(''); }} disabled={Number(user.id) === Number(currentUser.id)} title={Number(user.id) === Number(currentUser.id) ? 'You cannot delete your current account' : `Delete ${user.name}`} aria-label={`Delete ${user.name}`}><Trash2 size={16} /></button>}</div></td></tr>)}</tbody></table></div></section>
     <section className="role-grid">{Object.entries(ROLE_LABELS).map(([key, label]) => <article key={key}><span className="role-icon"><ShieldCheck size={18} /></span><h3>{label}</h3><p>{roleSummary(key)}</p></article>)}</section>
-    {open && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setOpen(false)} aria-label="Close" /><form className="modal-card" onSubmit={add}><header><div><p className="kicker">New account</p><h2>Add staff user</h2></div><button type="button" onClick={() => setOpen(false)}><X /></button></header><Field label="Full name" required><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></Field><Field label="Email" required><input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required /></Field><Field label="Role"><select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>{Object.entries(ROLE_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Field label="Temporary password" required><input type="password" minLength="8" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} required /></Field><footer><Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit">Create user</Button></footer></form></div>}
+    {open && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setOpen(false)} aria-label="Close" /><form className="modal-card" onSubmit={add} role="dialog" aria-modal="true" aria-labelledby="add-user-title"><header><div><p className="kicker">New account</p><h2 id="add-user-title">Add staff user</h2><p>The user will replace this temporary password at first sign-in.</p></div><button type="button" onClick={() => setOpen(false)} aria-label="Close"><X /></button></header><Field label="Full name" required><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} autoComplete="off" required /></Field><Field label="Email" required><input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} autoComplete="off" required /></Field><Field label="Role"><select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>{assignableRoles.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Field label="Temporary password" hint="At least 12 characters. Share it through a secure channel."><input type="password" minLength="12" maxLength="200" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required /></Field><footer><Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit">Create user</Button></footer></form></div>}
+    {editingUser && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setEditingUser(null)} aria-label="Close user editor" /><form className="modal-card user-edit-dialog" onSubmit={saveUser} role="dialog" aria-modal="true" aria-labelledby="edit-user-title"><header><div><p className="kicker">Account details</p><h2 id="edit-user-title">Edit staff user</h2><p>Update identity, access role and sign-in status for this staff account.</p></div><button type="button" onClick={() => setEditingUser(null)} aria-label="Close"><X /></button></header><div className="user-edit-identity"><span className="avatar">{initials(editingUser.name)}</span><span><strong>{editingUser.name || 'Staff account'}</strong><small>{editingUser.email || 'No email entered'}</small></span></div><div className="form-grid"><Field label="Full name" required hint={currentUser.role !== 'admin' ? 'Only administrators can change identity details.' : ''}><input value={editingUser.name} onChange={e => setEditingUser({ ...editingUser, name: e.target.value })} disabled={currentUser.role !== 'admin'} maxLength="160" required /></Field><Field label="Email address" required><input type="email" value={editingUser.email} onChange={e => setEditingUser({ ...editingUser, email: e.target.value })} disabled={currentUser.role !== 'admin'} maxLength="254" required /></Field><Field label="Role"><select value={editingUser.role} onChange={e => setEditingUser({ ...editingUser, role: e.target.value })} disabled={currentUser.role !== 'admin' && editingUser.role === 'admin'}>{(editingUser.role === 'admin' && currentUser.role !== 'admin' ? Object.entries(ROLE_LABELS) : assignableRoles).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field></div>{currentUser.role === 'admin' && <label className="account-status-control"><input type="checkbox" checked={editingUser.active} disabled={Number(editingUser.id) === Number(currentUser.id)} onChange={e => setEditingUser({ ...editingUser, active: e.target.checked })} /><span><strong>Account active</strong><small>{Number(editingUser.id) === Number(currentUser.id) ? 'You cannot deactivate the account you are currently using.' : 'Inactive users cannot sign in. Deactivation also ends their current sessions.'}</small></span><StatusBadge tone={editingUser.active ? 'success' : 'neutral'}>{editingUser.active ? 'Active' : 'Inactive'}</StatusBadge></label>}<footer><Button type="button" variant="secondary" onClick={() => setEditingUser(null)}>Cancel</Button><Button type="submit" icon={Pencil} disabled={savingUser || !editingUser.name.trim() || !editingUser.email.includes('@')}>{savingUser ? 'Saving changes…' : 'Save user changes'}</Button></footer></form></div>}
+    {pendingDelete && <div className="modal-layer"><button className="drawer-scrim" onClick={closeDelete} aria-label="Close delete confirmation" /><section className="modal-card destructive-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-user-title"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent access removal</p><h2 id="delete-user-title">Delete {pendingDelete.name}?</h2></div><button type="button" onClick={closeDelete} aria-label="Close"><X /></button></header><p>This immediately signs the user out and removes their staff access. Attendance and audit history remain available for organizational records.</p><div className="destructive-dialog__identity"><span className="avatar avatar--small">{initials(pendingDelete.name)}</span><span><strong>{pendingDelete.name}</strong><small>{pendingDelete.email} · {ROLE_LABELS[pendingDelete.role]}</small></span></div><Field label={<>Type <strong>{pendingDelete.email}</strong> to confirm</>}><input value={deleteConfirmation} onChange={e => setDeleteConfirmation(e.target.value)} autoComplete="off" /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== pendingDelete.email.toLowerCase()} onClick={deleteUser}>{deleting ? 'Deleting…' : 'Delete user'}</Button></footer></section></div>}
   </>;
 }
 
@@ -965,8 +1097,9 @@ export default function App() {
       <Route path="/" element={<LandingPage session={session} />} />
       <Route path="/about" element={<AboutPage session={session} />} />
       <Route path="/faq" element={<FaqPage session={session} />} />
-      <Route path="/login" element={session ? <Navigate to="/app" replace /> : <LoginPage onLogin={setSession} />} />
-      <Route path="/app" element={session ? <AppShell user={session} onLogout={logout}><Outlet /></AppShell> : <Navigate to="/login" replace />}>
+      <Route path="/login" element={session ? <Navigate to={session.must_change_password ? '/change-password' : '/app'} replace /> : <LoginPage onLogin={setSession} />} />
+      <Route path="/change-password" element={!session ? <Navigate to="/login" replace /> : session.must_change_password ? <FirstLoginPasswordPage user={session} onChanged={setSession} onLogout={logout} /> : <Navigate to="/app" replace />} />
+      <Route path="/app" element={!session ? <Navigate to="/login" replace /> : session.must_change_password ? <Navigate to="/change-password" replace /> : <AppShell user={session} onLogout={logout}><Outlet /></AppShell>}>
         <Route index element={<DashboardPage user={session} showToast={showToast} />} />
         <Route path="admin" element={can(session, 'users:manage') ? <AdminDashboardPage user={session} showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="members" element={can(session, 'members:view') ? <MembersPage user={session} showToast={showToast} /> : <Navigate to="/app" replace />} />
@@ -975,11 +1108,11 @@ export default function App() {
         <Route path="finance" element={can(session, 'finance:view') ? <FinancePage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="hr" element={can(session, 'hr:view') ? <HrPage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="attendance" element={<AttendancePage showToast={showToast} />} />
-        <Route path="users" element={can(session, 'users:manage') ? <UsersPage showToast={showToast} /> : <Navigate to="/app" replace />} />
+        <Route path="users" element={can(session, 'users:manage') ? <UsersPage currentUser={session} showToast={showToast} onCurrentUserUpdated={setSession} /> : <Navigate to="/app" replace />} />
         <Route path="audit" element={can(session, 'audit:view') ? <AuditPage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="data-care" element={can(session, 'members:view') ? <DataCarePage /> : <Navigate to="/app" replace />} />
         <Route path="settings" element={can(session, 'settings:manage') ? <OfficeSettingsPage showToast={showToast} /> : <Navigate to="/app" replace />} />
-        <Route path="profile" element={<ProfilePage user={session} />} />
+        <Route path="profile" element={<ProfilePage user={session} showToast={showToast} />} />
         <Route path="*" element={<NotFoundPage session={session} app />} />
       </Route>
       <Route path="*" element={<NotFoundPage session={session} />} />
