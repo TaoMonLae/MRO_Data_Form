@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="description" content="Secure member registry for Mon Refugee Organization." />
+    <link rel="icon" type="image/png" href="/assets/mro-logo.png" />
+    <title>MRO Registry</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('mro-theme');
+        const theme = savedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', theme === 'dark' ? '#08090a' : '#ffffff');
+      } catch {}
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

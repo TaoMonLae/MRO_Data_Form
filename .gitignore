@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# Runtime data and generated documents
+submissions.db
+submissions.db-shm
+submissions.db-wal
+pdfs/
+qr_codes/
+output/
+public/uploads/*
+
+# Office source data and local reference material
+*.xlsx
+*.xls
+reference_form.pdf
+
+# Local editor and OS files
+.DS_Store
