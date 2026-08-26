@@ -85,6 +85,10 @@ For bulk photos, create a ZIP containing JPG, JPEG or PNG files named exactly wi
 
 Forms are printed directly from the print icon on each Member records row, so there is no separate Form Printing navigation item.
 
+All user-facing data dates use `dd-mm-yyyy`. PostgreSQL and browser date controls continue to use ISO `yyyy-mm-dd` internally so sorting, validation and storage remain reliable.
+
+Administrators can permanently delete a member from the row actions or member drawer. Deletion requires typing the member’s MRO Status number and removes both the PostgreSQL record and its managed uploaded photo. The audit log retains only a minimal deletion event without copying the member’s name or reference into the event detail.
+
 ## Daily carding and expenses
 
 Card Printing Staff, Finance Officers, the Chair Person and Administrators can use **Daily carding**. It records service type, paid and unpaid card counts, rate, other income, expenses, payment method and notes. Monthly totals show paid cards, unpaid cards, expenses and net position.

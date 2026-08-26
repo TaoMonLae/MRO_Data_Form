@@ -77,7 +77,7 @@ function malaysiaDateTime(date = new Date()) {
   return new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kuala_Lumpur', day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-  }).format(date).replace(',', '');
+  }).format(date).replace(',', '').replaceAll('/', '-');
 }
 
 function malaysiaTime(date = new Date()) {
@@ -104,14 +104,14 @@ function dateOrNull(value) {
 function toDisplayDate(value) {
   const normalized = toIsoDate(value);
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
-  return match ? `${match[3]}/${match[2]}/${match[1]}` : normalized;
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : normalized;
 }
 
 function toIsoDate(value) {
   if (value instanceof Date) return malaysiaDate(value);
   const iso = /^(\d{4}-\d{2}-\d{2})/.exec(String(value || ''));
   if (iso) return iso[1];
-  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(value || ''));
+  const match = /^(\d{2})[-/](\d{2})[-/](\d{4})$/.exec(String(value || '').trim());
   return match ? `${match[3]}-${match[2]}-${match[1]}` : String(value || '');
 }
 
@@ -557,6 +557,41 @@ app.put('/api/members/:id', ...requirePermission('members:edit'), photoUpload.si
   } finally { if (req.file && !completed && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); }
 });
 
+app.delete('/api/members/:id', ...requirePermission('members:edit'), async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can permanently delete member records.' });
+    const member = await get('SELECT id, reference, photo_path FROM submissions WHERE id = ?', [req.params.id]);
+    if (!member) return res.status(404).json({ error: 'Member record not found.' });
+    const confirmation = String(req.body?.confirmation || '').trim().toLowerCase();
+    if (confirmation !== String(member.reference).trim().toLowerCase()) {
+      return res.status(400).json({ error: 'Enter the member’s MRO Status number exactly to confirm deletion.' });
+    }
+    const uploadsRoot = path.resolve(ROOT, 'public', 'uploads');
+    const photoPath = member.photo_path ? path.resolve(member.photo_path) : '';
+    let removedPhoto = null;
+    if (photoPath && photoPath.startsWith(`${uploadsRoot}${path.sep}`) && fs.existsSync(photoPath)) {
+      removedPhoto = { path: photoPath, data: await fs.promises.readFile(photoPath) };
+      await fs.promises.unlink(photoPath);
+    }
+    try {
+      await transaction(async ({ run: txRun }) => {
+        const deleted = await txRun('DELETE FROM submissions WHERE id = ?', [member.id]);
+        if (!deleted.changes) { const missing = new Error('Member record not found.'); missing.status = 404; throw missing; }
+        await txRun(`INSERT INTO audit_logs (user_id, actor_name, action, detail, entity_type, entity_id, ip_address, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [req.user.id, req.user.name, 'Member record permanently deleted',
+          'A member record and its managed photo were permanently removed.', 'member', String(member.id), req.ip, new Date()]);
+      });
+    } catch (deleteError) {
+      if (removedPhoto && !fs.existsSync(removedPhoto.path)) {
+        try { await fs.promises.writeFile(removedPhoto.path, removedPhoto.data, { flag: 'wx' }); }
+        catch (restoreError) { console.error(`Member ${member.id} deletion failed and its photo could not be restored:`, restoreError); }
+      }
+      throw deleteError;
+    }
+    res.status(204).end();
+  } catch (error) { next(error); }
+});
+
 const IMPORT_ALIASES = {
   reference: ['mro status number', 'mro status no', 'mro number', 'mro status'],
   reference_number: ['reference number', 'reference no', 'reference', 'ref number', 'ref no'],
@@ -571,7 +606,7 @@ function spreadsheetValue(value) {
   if (value instanceof Date) {
     const day = String(value.getUTCDate()).padStart(2, '0');
     const month = String(value.getUTCMonth() + 1).padStart(2, '0');
-    return `${day}/${month}/${value.getUTCFullYear()}`;
+    return `${day}-${month}-${value.getUTCFullYear()}`;
   }
   if (typeof value === 'object') return String(value.text ?? value.result ?? value.hyperlink ?? '');
   return String(value).trim();
@@ -951,7 +986,7 @@ app.post('/api/carding', ...requirePermission('carding:edit'), async (req, res, 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?) RETURNING id`,
     [values.record_date, values.category, values.service_type, values.paid_cards, values.unpaid_cards, values.rate, values.amount,
       values.net_amount, values.payment_method, values.notes, req.user.id, req.user.id]);
-    await audit(req, 'Daily carding entry added', `${values.record_date} · ${values.service_type} · ${values.paid_cards + values.unpaid_cards} cards · RM ${values.net_amount.toFixed(2)}`, 'carding', result.lastID);
+    await audit(req, 'Daily carding entry added', `${toDisplayDate(values.record_date)} · ${values.service_type} · ${values.paid_cards + values.unpaid_cards} cards · RM ${values.net_amount.toFixed(2)}`, 'carding', result.lastID);
     res.status(201).json({ id: result.lastID });
   } catch (error) { next(error); }
 });
@@ -965,7 +1000,7 @@ app.put('/api/carding/:id', ...requirePermission('carding:edit'), async (req, re
     [values.record_date, values.category, values.service_type, values.paid_cards, values.unpaid_cards, values.rate, values.amount,
       values.net_amount, values.payment_method, values.notes, req.user.id, req.params.id]);
     if (!result.changes) return res.status(404).json({ error: 'Carding entry not found.' });
-    await audit(req, 'Daily carding entry updated', `${values.record_date} · ${values.service_type}`, 'carding', req.params.id);
+    await audit(req, 'Daily carding entry updated', `${toDisplayDate(values.record_date)} · ${values.service_type}`, 'carding', req.params.id);
     res.json({ id: Number(req.params.id) });
   } catch (error) { next(error); }
 });

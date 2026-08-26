@@ -101,8 +101,10 @@ function can(user, permission) {
 
 function formatDate(value) {
   if (!value) return '—';
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]}`;
+  const dayFirst = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(String(value));
+  if (dayFirst) return `${dayFirst[1]}-${dayFirst[2]}-${dayFirst[3]}`;
   return value;
 }
 
@@ -112,7 +114,7 @@ function formatMoney(value) {
 
 function dateForInput(value) {
   if (!value) return '';
-  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value);
+  const match = /^(\d{2})[-/](\d{2})[-/](\d{4})$/.exec(String(value));
   return match ? `${match[3]}-${match[2]}-${match[1]}` : value;
 }
 
@@ -725,8 +727,12 @@ function MembersPage({ user, showToast }) {
   const [importing, setImporting] = useState(false);
   const [photoImporting, setPhotoImporting] = useState(false);
   const [importPreview, setImportPreview] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const mayEdit = can(user, 'members:edit');
   const mayPrint = can(user, 'print:forms');
+  const mayDelete = user.role === 'admin';
 
   async function load() {
     setLoading(true); setLoadError('');
@@ -771,6 +777,26 @@ function MembersPage({ user, showToast }) {
     finally { setPhotoImporting(false); event.target.value = ''; }
   }
 
+  function requestDelete(member) {
+    setEditing(null); setPendingDelete(member); setDeleteConfirmation('');
+  }
+
+  function closeDelete() {
+    if (deleting) return;
+    setPendingDelete(null); setDeleteConfirmation('');
+  }
+
+  async function deleteMember() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await api(`/api/members/${pendingDelete.id}`, { method: 'DELETE', body: JSON.stringify({ confirmation: deleteConfirmation }) });
+      showToast(`${pendingDelete.fullname}'s member record was permanently deleted.`);
+      setPendingDelete(null); setDeleteConfirmation(''); load();
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { setDeleting(false); }
+  }
+
   return <>
     <section className="page-title-row">
       <div><p className="kicker">Data keeping & printing</p><h2>Member records</h2><p>Search, migrate photos and print forms from one accountable member record.</p></div>
@@ -793,19 +819,20 @@ function MembersPage({ user, showToast }) {
             <td><button className="member-cell" onClick={() => setEditing(row)}><span className="member-avatar">{row.photo_url ? <img src={row.photo_url} alt="" /> : initials(row.fullname)}</span><span><strong>{row.fullname}</strong><small>{row.email || 'No email'}</small></span></button></td>
             <td><span className="mono">{row.reference}</span></td><td><span className="mono">{row.reference_number || '—'}</span></td><td>{row.gender || '—'}</td><td>{formatDate(row.dob)}</td><td>{row.phone || '—'}</td>
             <td>{row.photo_url ? <StatusBadge tone="success">Ready</StatusBadge> : <StatusBadge tone="warning">Missing</StatusBadge>}</td>
-            <td><div className="row-actions">{mayPrint && <button disabled={!row.reference_number} title={row.reference_number ? 'Preview form' : 'Add a Reference Number before printing'} onClick={() => window.open(`/api/members/${row.id}/print`, '_blank')} aria-label={`Print form for ${row.fullname}`}><Printer size={17} /></button>}{mayEdit && <button onClick={() => setEditing(row)} aria-label={`Edit ${row.fullname}`}><Pencil size={17} /></button>}</div></td>
+            <td><div className="row-actions">{mayPrint && <button disabled={!row.reference_number} title={row.reference_number ? 'Preview form' : 'Add a Reference Number before printing'} onClick={() => window.open(`/api/members/${row.id}/print`, '_blank')} aria-label={`Print form for ${row.fullname}`}><Printer size={17} /></button>}{mayEdit && <button onClick={() => setEditing(row)} aria-label={`Edit ${row.fullname}`}><Pencil size={17} /></button>}{mayDelete && <button className="row-action--danger" onClick={() => requestDelete(row)} title={`Delete ${row.fullname}`} aria-label={`Delete ${row.fullname}`}><Trash2 size={17} /></button>}</div></td>
           </tr>)}</tbody></table>
         {!loading && loadError && <PageState title="Member records unavailable" message={loadError} onRetry={load} />}
         {!loading && !loadError && !rows.length && <EmptyState icon={Search} title="No matching records">Try a different search or photo filter.</EmptyState>}
         {loading && <div className="loading-row"><RefreshCw className="spin" size={18} />Loading records…</div>}
       </div>
     </section>
-    {editing && <MemberDrawer member={editing} canEdit={mayEdit} canPrint={mayPrint} onClose={() => setEditing(null)} onSave={save} />}
+    {editing && <MemberDrawer member={editing} canEdit={mayEdit} canPrint={mayPrint} canDelete={mayDelete} onClose={() => setEditing(null)} onSave={save} onDelete={requestDelete} />}
     {importPreview && <ImportReviewModal preview={importPreview} committing={importing} onClose={() => setImportPreview(null)} onCommit={commitImport} />}
+    {pendingDelete && <div className="modal-layer"><button className="drawer-scrim" onClick={closeDelete} aria-label="Close member deletion confirmation" /><section className="modal-card destructive-dialog member-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-member-title"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent member deletion</p><h2 id="delete-member-title">Delete this member record?</h2></div><button type="button" onClick={closeDelete} disabled={deleting} aria-label="Close"><X /></button></header><p>This cannot be undone. The registry data and uploaded member photo will be permanently removed. A minimal audit event will remain without the member’s name or reference.</p><div className="destructive-dialog__identity"><span className="member-avatar">{pendingDelete.photo_url ? <img src={pendingDelete.photo_url} alt="" /> : initials(pendingDelete.fullname)}</span><span><strong>{pendingDelete.fullname}</strong><small>MRO {pendingDelete.reference}{pendingDelete.reference_number ? ` · Ref ${pendingDelete.reference_number}` : ''}</small></span></div><Field label={<>Type MRO Status <strong className="mono">{pendingDelete.reference}</strong> to confirm</>}><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" autoFocus /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete} disabled={deleting}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== String(pendingDelete.reference).trim().toLowerCase()} onClick={deleteMember}>{deleting ? 'Deleting member…' : 'Permanently delete member'}</Button></footer></section></div>}
   </>;
 }
 
-function MemberDrawer({ member, canEdit, canPrint, onClose, onSave }) {
+function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, onDelete }) {
   const [form, setForm] = useState({ ...EMPTY_MEMBER, ...member, dob: dateForInput(member.dob), arrival: dateForInput(member.arrival) });
   const [photo, setPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -841,7 +868,7 @@ function MemberDrawer({ member, canEdit, canPrint, onClose, onSave }) {
           <Field label="Ethnicity"><input value={form.ethnicity || ''} onChange={e => set('ethnicity', e.target.value)} disabled={!canEdit} /></Field>
           <Field label="Religion"><input value={form.religion || ''} onChange={e => set('religion', e.target.value)} disabled={!canEdit} /></Field>
         </div></FormSection>
-        <footer className="drawer-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview form' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
+        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview form' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
       </form>
     </aside>
   </div>;
@@ -875,7 +902,7 @@ function AttendancePage({ showToast }) {
   </>;
 }
 
-function AttendanceTable({ rows }) { return rows?.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Clock in</th><th>Clock out</th><th>Duration</th><th>Location proof</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{row.work_date}</td><td>{row.clock_in || '—'}</td><td>{row.clock_out || '—'}</td><td>{row.duration || '—'}</td><td><div className="attendance-proof"><span className={row.clock_in_location_verified ? 'is-verified' : ''}><MapPin size={13} /> In {row.clock_in_location_verified ? `${row.clock_in_distance_meters} m` : '—'}</span><span className={row.clock_out_location_verified ? 'is-verified' : ''}><MapPin size={13} /> Out {row.clock_out_location_verified ? `${row.clock_out_distance_meters} m` : '—'}</span></div></td></tr>)}</tbody></table></div> : <EmptyState icon={CalendarClock} title="No attendance yet">Your clock activity will appear here.</EmptyState>; }
+function AttendanceTable({ rows }) { return rows?.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Clock in</th><th>Clock out</th><th>Duration</th><th>Location proof</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{formatDate(row.work_date)}</td><td>{row.clock_in || '—'}</td><td>{row.clock_out || '—'}</td><td>{row.duration || '—'}</td><td><div className="attendance-proof"><span className={row.clock_in_location_verified ? 'is-verified' : ''}><MapPin size={13} /> In {row.clock_in_location_verified ? `${row.clock_in_distance_meters} m` : '—'}</span><span className={row.clock_out_location_verified ? 'is-verified' : ''}><MapPin size={13} /> Out {row.clock_out_location_verified ? `${row.clock_out_distance_meters} m` : '—'}</span></div></td></tr>)}</tbody></table></div> : <EmptyState icon={CalendarClock} title="No attendance yet">Your clock activity will appear here.</EmptyState>; }
 
 function CardingPage({ showToast }) {
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
