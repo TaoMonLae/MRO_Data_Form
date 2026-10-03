@@ -1,0 +1,101 @@
+
+> mon-refugee-org-membership@1.0.0 test
+> node --test tests/*.test.js
+
+GET /api/users 401 1.510 ms
+POST /auth/logout 403 0.107 ms
+POST /auth/logout 403 0.088 ms
+GET /api/auth/session 401 0.140 ms
+GET /api/users 200 10.769 ms
+GET / 200 1.151 ms
+GET /index-DnwpI6Az.js 200 0.307 ms
+GET /index-DhhFMJZc.css 200 0.278 ms
+▶ API security and data regression suite
+  ✔ anonymous access and cross-origin mutations are denied (35.376458ms)
+GET /api/users 403 0.528 ms
+GET /api/users 403 0.715 ms
+GET /api/users 403 0.381 ms
+GET /api/users 403 0.312 ms
+GET /api/users 403 0.307 ms
+GET /api/members 403 0.233 ms
+GET /api/finance 403 0.203 ms
+GET /api/attendance 200 2.784 ms
+GET /api/attendance 200 1.001 ms
+POST /api/users 403 27.668 ms
+PUT /api/users/1 409 1.227 ms
+  ✔ role matrix is enforced on the server (54.8285ms)
+POST /api/members 400 2.778 ms
+POST /api/members 201 2.542 ms
+GET /AUDITPHOTO-7b329cee-e8ab-4aa5-89dd-668aa7814036.png 401 0.063 ms
+GET /AUDITPHOTO-7b329cee-e8ab-4aa5-89dd-668aa7814036.png 403 1.308 ms
+GET /AUDITPHOTO-7b329cee-e8ab-4aa5-89dd-668aa7814036.png 200 0.497 ms
+GET /uploads/missing-audit-photo.png 404 0.353 ms
+GET /uploads/AUDITPHOTO-7b329cee-e8ab-4aa5-89dd-668aa7814036.png 404 0.105 ms
+POST /api/members 409 1.503 ms
+POST /api/members 400 2.619 ms
+GET /api/members/1/print 200 1640.185 ms
+  ✔ photos require member access, validate bytes, and survive conflicting uploads (1670.929834ms)
+POST /api/attendance/clock 200 4.053 ms
+POST /api/attendance/clock 409 5.207 ms
+POST /api/attendance/clock 409 1.264 ms
+POST /api/attendance/clock 200 1.341 ms
+  ✔ simultaneous clock actions produce one success and one conflict (10.884084ms)
+POST /api/finance 400 0.824 ms
+POST /api/finance 400 0.416 ms
+POST /api/finance/import 200 13.824 ms
+  ✔ invalid amounts and dates fail instead of silently changing financial records (35.650916ms)
+POST /api/users 201 25.963 ms
+POST /api/auth/login 200 25.191 ms
+GET /api/members 403 0.241 ms
+POST /api/auth/change-password 200 73.204 ms
+GET /api/members 200 0.615 ms
+  ✔ temporary accounts cannot read records before changing their password (135.25075ms)
+POST /api/users/3/reset-password 200 24.280 ms
+GET /api/auth/session 401 0.280 ms
+PUT /api/users/5 200 1.573 ms
+GET /api/auth/session 401 0.287 ms
+  ✔ password resets and role changes revoke existing sessions (33.478708ms)
+GET /api/audit 200 0.651 ms
+GET /api/dashboard 200 3.813 ms
+  ✔ registry audit access cannot disclose finance or staff account details (7.75725ms)
+DELETE /api/users/3 400 0.887 ms
+DELETE /api/users/3 204 1.127 ms
+  ✔ account deletion requires matching confirmation and retains historical attendance (6.485917ms)
+PUT /api/users/1 200 1.148 ms
+PUT /api/users/9 403 1.264 ms
+  ✔ concurrent administrators cannot deactivate each other and leave zero administrators (2.680292ms)
+✔ API security and data regression suite (2116.336625ms)
+✔ malformed cookies do not crash authentication or pollute cookie objects (0.344666ms)
+✔ CSRF guard rejects simple forms, cross-site requests and untrusted origins (0.410458ms)
+✔ throttling reserves attempts immediately and expires without unbounded storage (0.111125ms)
+✔ password verification accepts valid hashes and safely rejects corrupt or unknown credentials (127.426917ms)
+✔ account capabilities protect own account, administrators and the last administrator (0.161958ms)
+✔ photo replacement preserves old image until persistence and rejects spoofed MIME types (129.054708ms)
+✔ ZIP photo streaming enforces actual bytes independent of ZIP metadata (0.811583ms)
+▶ PostgreSQL startup, administrator recovery and SQLite migration remain atomic
+  ✔ concurrent startups and administrator recovery do not race (220.276958ms)
+  ✔ a duplicate migration row rolls back the entire import (53.118ms)
+  ✔ migration preserves account restrictions, dates and IDs (54.504375ms)
+  ✔ migration refuses a populated target without changing rows (51.818458ms)
+✔ PostgreSQL startup, administrator recovery and SQLite migration remain atomic (407.6255ms)
+✔ DATABASE_SSL verifies certificates even when the URL asks to disable verification (11.397208ms)
+✔ invalid pool sizes fail before a connection is opened (1.582583ms)
+✔ database business days use Malaysia time without removing connection options (0.3865ms)
+✔ an idle PostgreSQL connection failure is handled without crashing (0.291042ms)
+✔ failed rollback preserves the original error and discards the client once (0.638042ms)
+✔ successful transactions commit and release their connection once (0.384084ms)
+✔ migration dates reject impossible calendar values without silently replacing data (1.943166ms)
+✔ migration preserves explicit inactive states and rejects malformed family records (0.571208ms)
+✔ admin recovery revokes sessions and records the reset inside the account transaction (27.83125ms)
+✔ calendar validation rejects impossible dates while retaining leap days (1.191375ms)
+✔ money parsing preserves formatted values and refuses silent corruption (0.422916ms)
+✔ card counts reject rounding, negative counts and overflow (0.101833ms)
+✔ finance imports retain explicit zero and derive only missing net amounts (0.049375ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2236.805042

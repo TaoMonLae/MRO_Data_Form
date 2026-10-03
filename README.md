@@ -59,7 +59,7 @@ React 19 + Node/Express operations workspace for Mon Refugee Organization member
    npm run admin:ensure
    ```
 
-   This is safe to run after migration. It does not change member records or other staff accounts. The administrator must replace this temporary password at the next sign-in.
+   This is safe to run after migration. It resets the configured administrator's password, revokes all of that account's sessions, and records the recovery in the audit log. The administrator must replace this temporary password at the next sign-in. Member records and other staff accounts are preserved.
 
 7. Run the React client and Node API:
 
@@ -108,15 +108,33 @@ npm run build
 NODE_ENV=production npm start
 ```
 
-The Express server serves the built React application and API from one Node.js process. PostgreSQL can run as a normal operating-system service on the server or through a managed PostgreSQL provider. Set a production `DATABASE_URL`, a strong initial administrator password and `DATABASE_SSL=true` when required by the provider.
+The Express server serves the built React application and API from one Node.js process. PostgreSQL can run as a normal operating-system service on the server or through a managed PostgreSQL provider. Set a production `DATABASE_URL`, a strong initial administrator password and `DATABASE_SSL=true` when required by the provider. TLS connections enabled with `DATABASE_SSL=true` verify both the server certificate and hostname. If the provider uses a private certificate authority, add its CA file through the `sslrootcert` parameter in `DATABASE_URL`; certificate verification is never disabled by this setting. PostgreSQL sessions use `Asia/Kuala_Lumpur` so date and month boundaries agree with attendance and reports.
 
 The initial account variables are used only when the PostgreSQL `users` table is empty.
 
+Use a unique initial password; no built-in password is supplied. When a reverse proxy terminates HTTPS, set `APP_ORIGIN` to the exact public origin (for example `https://registry.example.org`) and `TRUST_PROXY` only to the proxy's trusted address/subnet. The client sends `X-MRO-Request: 1` on mutations; other API clients must do the same. Cross-origin mutations are rejected. Production cookies require HTTPS. Chromium must run with its sandbox supported by the deployment environment.
+
+`server.js` is a retired SQLite implementation and deliberately refuses to start. Use `npm start` exclusively. Member photos are served through authenticated `/uploads` requests; do not configure a reverse proxy or hosting service to expose `public/uploads` directly. Brand images and built JavaScript/CSS are the only public assets.
+
+Login and password throttling is local to each Node process. Before running multiple instances, add shared rate limiting at the trusted gateway or in a shared store. Administrator password resets end the target's sessions and force a password change; role changes and deactivation also revoke sessions. Data Management Staff can view registry audit events only; account, HR and finance audit events remain with Admin and Chair Person.
+
+## Verification
+
+Run `npm test` for unit checks and `npm run build` for the client build. Integration tests are opt-in and require a disposable PostgreSQL database named `mro_test_*`:
+
+```bash
+MRO_TEST_DATABASE_URL=postgres://localhost/mro_test_audit MRO_TEST_PDF=true npm test
+```
+
+The API integration suite clears application tables in that **test database** and uses synthetic staff/member records. Never point it at an application database. The database migration suite uses and removes an isolated schema. `MRO_TEST_PDF=true` also verifies sandboxed Chromium PDF generation. See `AUDIT_REPORT.md` and `UI_AUDIT.md` for findings, design references, verification and remaining deployment work.
+
 ## PostgreSQL migration behavior
 
-The migration copies users, member submissions, sessions, attendance and audit logs while preserving IDs and password hashes. It normalizes member dates to PostgreSQL `DATE`, operational timestamps to `TIMESTAMPTZ`, family data to `JSONB`, and active flags to `BOOLEAN`.
+The migration copies users, member submissions, sessions, attendance and audit logs while preserving IDs, password hashes, soft-deletion state and password-change requirements. Legacy accounts without a password-change flag must update their password after migration. It normalizes member dates to PostgreSQL `DATE`, operational timestamps to `TIMESTAMPTZ`, family data to `JSONB`, and active flags to `BOOLEAN`. SQLite timestamps without a timezone are interpreted as UTC; displayed day/month/year timestamps and attendance times use Malaysia time.
 
-For safety, migration stops when the target PostgreSQL database already contains application data. Keep the original SQLite file as a read-only backup until record counts, login, member searches, attendance and PDF output have been verified.
+For safety, migration locks the target tables and stops when the target PostgreSQL database already contains application data. Duplicate records, invalid dates or malformed family data stop the migration and roll back the imported rows so no source rows are silently discarded. Keep the original SQLite file as a read-only backup until record counts, login, member searches, attendance and PDF output have been verified.
+
+Run `node --test tests/database.test.js` for database helper regressions. To include real PostgreSQL migration and administrator-recovery checks, set `MRO_TEST_DATABASE_URL` to a disposable test database and run `node --test tests/database*.test.js`. The integration test creates and removes its own uniquely named schema.
 
 ## Sensitive-data deployment checklist
 

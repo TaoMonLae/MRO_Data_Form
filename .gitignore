@@ -3,6 +3,10 @@ dist/
 .env
 .env.*
 !.env.example
+token.json
+credentials.json
+.impeccable/config.json
+.impeccable/config.kson
 
 # Runtime data and generated documents
 submissions.db

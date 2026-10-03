@@ -6,12 +6,36 @@ if (!DATABASE_URL) {
   throw new Error('DATABASE_URL is required. Copy .env.example to .env and add your PostgreSQL connection string.');
 }
 
+const poolMax = Number(process.env.DATABASE_POOL_MAX || 10);
+if (!Number.isInteger(poolMax) || poolMax < 1 || poolMax > 100) {
+  throw new Error('DATABASE_POOL_MAX must be an integer between 1 and 100.');
+}
+
+let connectionUrl;
+try { connectionUrl = new URL(DATABASE_URL); }
+catch { throw new Error('DATABASE_URL must be a valid PostgreSQL connection URL.'); }
+const connectionOptions = connectionUrl.searchParams.get('options') || process.env.PGOPTIONS || '';
+// CURRENT_DATE and date_trunc must use the same business day as attendance and
+// the UI. Preserve provider/search-path options while making the timezone final.
+connectionUrl.searchParams.set('options', `${connectionOptions} -c timezone=Asia/Kuala_Lumpur`.trim());
+if (process.env.DATABASE_SSL === 'true') {
+  // pg gives URL SSL parameters precedence over its ssl option. Set the mode
+  // in the URL too, so sslmode=require/no-verify cannot disable verification.
+  connectionUrl.searchParams.set('sslmode', 'verify-full');
+}
+
 const pool = new Pool({
-  connectionString: DATABASE_URL,
-  max: Number(process.env.DATABASE_POOL_MAX || 10),
+  connectionString: connectionUrl.toString(),
+  max: poolMax,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 8_000,
-  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined
+  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: true } : undefined
+});
+
+// Idle connections can fail when PostgreSQL restarts. Without an error listener
+// pg emits an unhandled error and terminates the entire application process.
+pool.on('error', error => {
+  console.error('An idle PostgreSQL connection failed:', error.code || 'CONNECTION_ERROR');
 });
 
 function postgresSql(sql) {
@@ -44,6 +68,7 @@ async function all(sql, params = [], client = pool) {
 
 async function transaction(callback) {
   const client = await pool.connect();
+  let releaseError;
   try {
     await client.query('BEGIN');
     const helpers = {
@@ -56,15 +81,23 @@ async function transaction(callback) {
     await client.query('COMMIT');
     return value;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); }
+    catch (rollbackError) {
+      // A disconnected client must not be returned to the pool for reuse.
+      releaseError = rollbackError;
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(releaseError);
   }
 }
 
 async function initializeDatabase() {
-  await pool.query(`
+  await transaction(async ({ query: schemaQuery }) => {
+    // Startup may run concurrently in several processes. Serialize schema
+    // changes so checks and CREATE/ALTER statements cannot race each other.
+    await schemaQuery('SELECT pg_advisory_xact_lock(771462, 1)');
+    await schemaQuery(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGSERIAL PRIMARY KEY,
       name TEXT NOT NULL,
@@ -133,6 +166,7 @@ async function initializeDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions (expires_at);
+    CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions (user_id);
 
     CREATE TABLE IF NOT EXISTS attendance (
       id BIGSERIAL PRIMARY KEY,
@@ -273,7 +307,8 @@ async function initializeDatabase() {
 
     CREATE INDEX IF NOT EXISTS audit_logs_created_at ON audit_logs (created_at DESC);
     CREATE INDEX IF NOT EXISTS audit_logs_entity ON audit_logs (entity_type, entity_id);
-  `);
+    `);
+  });
 }
 
 async function closeDatabase() {

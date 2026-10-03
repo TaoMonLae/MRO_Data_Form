@@ -21,6 +21,14 @@ const ROLE_LABELS = {
   finance: 'Finance Officer'
 };
 
+const PERMISSION_LABELS = {
+  'members:view': 'View member records', 'members:edit': 'Edit member records', 'members:import': 'Import spreadsheets',
+  'members:export': 'Export spreadsheets', 'print:forms': 'Generate member forms',
+  'finance:view': 'View finance records', 'finance:edit': 'Manage payments', 'hr:view': 'View workforce records',
+  'hr:edit': 'Manage staff profiles', 'carding:view': 'View daily carding ledger', 'carding:edit': 'Manage carding and expenses',
+  'settings:manage': 'Manage office settings', 'users:manage': 'Manage users & roles', 'audit:view': 'Review audit activity'
+};
+
 const NAV_ITEMS = [
   { to: '/app', label: 'My workspace', icon: LayoutDashboard },
   { to: '/app/admin', label: 'Operations overview', icon: BarChart3, permission: 'users:manage' },
@@ -49,12 +57,12 @@ const EMPTY_MEMBER = {
 };
 
 const EMPTY_FINANCE = {
-  payment_date: new Date().toISOString().slice(0, 10), concern_person: '', concern_number: '', service_type: '',
+  payment_date: '', concern_person: '', concern_number: '', service_type: '',
   amount: '', deduction: '', net_amount: '', payment_method: 'Not recorded', payment_status: 'Not recorded', notes: ''
 };
 
 const EMPTY_CARDING = {
-  record_date: new Date().toISOString().slice(0, 10), category: 'service', service_type: 'MRO New', paid_cards: 0,
+  record_date: '', category: 'service', service_type: 'MRO New', paid_cards: 0,
   unpaid_cards: 0, rate: 130, amount: 0, payment_method: 'Not recorded', notes: ''
 };
 
@@ -79,12 +87,14 @@ function useApiResource(path) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const requestId = useRef(0);
+  const requestedPath = useRef(path);
   const load = useCallback(async () => {
     const id = ++requestId.current;
+    requestedPath.current = path;
     setLoading(true); setError('');
     try {
       const result = await api(path);
-      if (requestId.current === id) setData(result);
+      if (requestId.current === id) setData({ path, value: result });
     } catch (requestError) {
       if (requestId.current === id) setError(requestError.message);
     } finally {
@@ -92,7 +102,7 @@ function useApiResource(path) {
     }
   }, [path]);
   useEffect(() => { load(); return () => { requestId.current += 1; }; }, [load]);
-  return { data, loading, error, reload: load };
+  return { data: data?.path === path ? data.value : null, loading: loading || requestedPath.current !== path, error, reload: load };
 }
 
 function can(user, permission) {
@@ -106,6 +116,23 @@ function formatDate(value) {
   const dayFirst = /^(\d{2})[-/](\d{2})[-/](\d{4})/.exec(String(value));
   if (dayFirst) return `${dayFirst[1]}-${dayFirst[2]}-${dayFirst[3]}`;
   return value;
+}
+
+function officeDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
+function useOfficeDayRefresh(reload) {
+  useEffect(() => {
+    let day = officeDate();
+    const refreshDay = () => {
+      const today = officeDate();
+      if (today !== day) { day = today; reload(); }
+    };
+    const timer = window.setInterval(refreshDay, 60_000);
+    window.addEventListener('focus', refreshDay);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refreshDay); };
+  }, [reload]);
 }
 
 function formatMoney(value) {
@@ -162,6 +189,42 @@ function Button({ children, variant = 'primary', icon: Icon, className = '', ...
   return <button className={`button button--${variant} ${className}`} {...props}>
     {Icon && <Icon size={16} strokeWidth={2} aria-hidden="true" />}{children}
   </button>;
+}
+
+function ModalFrame({ children, labelledBy, onClose, busy = false, drawer = false }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const previouslyFocused = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    dialog.showModal();
+    document.body.style.overflow = 'hidden';
+    // Focus the title so opening a dialog does not summon a mobile keyboard.
+    const title = dialog.querySelector('h2');
+    if (title) { title.tabIndex = -1; title.focus(); }
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, []);
+  return <dialog ref={dialogRef} className={`accessible-modal ${drawer ? 'drawer-layer' : 'modal-layer'}`}
+    aria-labelledby={labelledBy} aria-busy={busy}
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onClick={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    {children}
+  </dialog>;
+}
+
+function RolePreview({ role }) {
+  if (!role) return null;
+  return <section className="role-preview" aria-live="polite"><div className="role-preview__heading"><ShieldCheck size={18} aria-hidden="true" /><strong>{role.label} access</strong></div>
+    <p>{role.summary}</p><details><summary>{role.permissions.length} granted permissions</summary><ul>{role.permissions.map(permission => <li key={permission}><Check size={14} aria-hidden="true" />{PERMISSION_LABELS[permission] || permission}</li>)}</ul></details>
+  </section>;
+}
+
+function FormError({ message }) {
+  return message ? <div className="form-alert" role="alert"><AlertTriangle size={17} aria-hidden="true" /><span>{message}</span></div> : null;
 }
 
 function EmptyState({ icon: Icon = Archive, title, children }) {
@@ -429,13 +492,43 @@ function FirstLoginPasswordPage({ user, onChanged, onLogout }) {
 
 function AppShell({ user, onLogout, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileLayout, setMobileLayout] = useState(() => window.matchMedia('(max-width: 850px)').matches);
+  const sidebarRef = useRef(null);
   const location = useLocation();
   useEffect(() => setMobileOpen(false), [location.pathname]);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 850px)');
+    const update = () => { setMobileLayout(media.matches); if (!media.matches) setMobileOpen(false); };
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  useEffect(() => {
+    if (!mobileOpen || !mobileLayout) return;
+    const sidebar = sidebarRef.current;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    sidebar.querySelector('button, a[href]')?.focus();
+    const onKeyDown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); setMobileOpen(false); }
+      if (event.key !== 'Tab') return;
+      const controls = [...sidebar.querySelectorAll('a[href], button:not([disabled])')];
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [mobileOpen, mobileLayout]);
   const active = location.pathname === '/app/profile' ? 'Profile & access' : NAV_ITEMS.find(item => item.to === location.pathname)?.label || 'MRO Registry';
 
   return <div className="app-shell">
-    <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`}>
-      <div className="sidebar-brand"><img src="/assets/mro-logo.png" alt="MRO" /><span><strong>MRO Registry</strong><small>Operations workspace</small></span></div>
+    <aside ref={sidebarRef} id="workspace-navigation" className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`} inert={mobileLayout && !mobileOpen} role={mobileLayout && mobileOpen ? 'dialog' : undefined} aria-modal={mobileLayout && mobileOpen ? true : undefined} aria-label="Workspace navigation">
+      <div className="sidebar-brand"><img src="/assets/mro-logo.png" alt="MRO" /><span><strong>MRO Registry</strong><small>Operations workspace</small></span><button className="sidebar-close" type="button" onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X size={18} /></button></div>
       <nav aria-label="Main navigation">
         <p className="nav-label">Workspace</p>
         {NAV_ITEMS.filter(item => can(user, item.permission)).map(({ to, label, icon: Icon }) =>
@@ -451,12 +544,12 @@ function AppShell({ user, onLogout, children }) {
         </div>
       </div>
     </aside>
-    {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-label="Close navigation" />}
-    <div className="app-main">
+    {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} tabIndex={-1} aria-label="Close navigation" />}
+    <div className="app-main" inert={mobileLayout && mobileOpen}>
       <header className="topbar">
-        <button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu /></button>
+        <button className="mobile-menu" onClick={() => setMobileOpen(true)} aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="workspace-navigation"><Menu /></button>
         <div><p className="topbar-context">MRO Operations</p><h1>{active}</h1></div>
-        <div className="topbar-actions"><ThemeToggle /><span className="confidential-pill"><ShieldCheck size={14} /> Confidential</span><button aria-label="Notifications"><Bell size={19} /></button><NavLink to="/app/profile" className="avatar avatar--small" aria-label="Open profile">{initials(user.name)}</NavLink></div>
+        <div className="topbar-actions"><ThemeToggle /><span className="confidential-pill"><ShieldCheck size={14} /> Confidential</span><NavLink to="/app/profile" className="avatar avatar--small" aria-label="Open profile">{initials(user.name)}</NavLink></div>
       </header>
       <div className="page-content">{children}</div>
     </div>
@@ -465,6 +558,7 @@ function AppShell({ user, onLogout, children }) {
 
 function DashboardPage({ user, showToast }) {
   const { data, loading, error, reload: load } = useApiResource('/api/dashboard');
+  useOfficeDayRefresh(load);
   const [busy, setBusy] = useState(false);
   const [locationProof, setLocationProof] = useState(null);
 
@@ -497,7 +591,7 @@ function DashboardPage({ user, showToast }) {
         : { label: 'Attendance status', value: data?.attendance?.status === 'clocked_in' ? 'In' : 'Out', detail: 'Malaysia office time', icon: Clock3, tone: 'green' };
   return <>
     <section className="page-hero page-hero--compact">
-      <div><p className="kicker">Wednesday · Kuala Lumpur</p><h2>Good day, {user.name.split(' ')[0]}.</h2><p>Here is what needs attention across member records and print operations.</p></div>
+      <div><p className="kicker">{new Intl.DateTimeFormat('en-MY', { timeZone: 'Asia/Kuala_Lumpur', weekday: 'long' }).format(new Date())} · Kuala Lumpur</p><h2>Good day, {user.name.split(' ')[0]}.</h2><p>Here is what needs attention across member records and print operations.</p></div>
       <ClockCard attendance={data?.attendance} geofence={data?.geofence} locationProof={locationProof} busy={busy} onVerify={verifyLocation} onClock={clock} />
     </section>
     <section className="stat-grid" aria-label="Personal KPI overview">
@@ -548,10 +642,11 @@ function LocationLockStatus({ geofence, attendance, locationProof, inverse = fal
 
 function ClockCard({ attendance, geofence, locationProof, busy, onVerify, onClock }) {
   const clockedIn = attendance?.status === 'clocked_in';
+  const completed = Boolean(attendance?.clock_out);
   const blocked = geofence?.enabled && !geofence?.configured;
-  const needsCheck = geofence?.enabled && !locationProof?.verified;
-  return <div className="clock-card"><div className="clock-card__body"><div><span className={`live-dot ${clockedIn ? 'live-dot--on' : ''}`} /> <strong>{clockedIn ? 'Currently clocked in' : 'Not clocked in'}</strong><p>{clockedIn ? `Started at ${attendance.clock_in}` : 'Record your attendance for today.'}</p></div><LocationLockStatus geofence={geofence} attendance={attendance} locationProof={locationProof} /></div>
-    <Button variant={needsCheck ? 'secondary' : clockedIn ? 'danger' : 'primary'} icon={busy ? RefreshCw : needsCheck ? MapPin : Clock3} className={busy ? 'is-loading' : ''} disabled={busy || blocked} onClick={() => needsCheck ? onVerify() : onClock(clockedIn ? 'out' : 'in')}>{busy ? 'Checking location…' : needsCheck ? 'Verify office location' : clockedIn ? 'Clock out' : 'Clock in'}</Button>
+  const needsCheck = !completed && geofence?.enabled && !locationProof?.verified;
+  return <div className="clock-card"><div className="clock-card__body"><div><span className={`live-dot ${clockedIn ? 'live-dot--on' : ''}`} /> <strong>{completed ? 'Attendance complete for today' : clockedIn ? 'Currently clocked in' : 'Not clocked in'}</strong><p>{completed ? `${attendance.clock_in}–${attendance.clock_out}` : clockedIn ? `Started at ${attendance.clock_in}` : 'Record your attendance for today.'}</p></div><LocationLockStatus geofence={geofence} attendance={attendance} locationProof={locationProof} /></div>
+    <Button variant={completed || needsCheck ? 'secondary' : clockedIn ? 'danger' : 'primary'} icon={busy ? RefreshCw : completed ? CheckCircle2 : needsCheck ? MapPin : Clock3} className={busy ? 'is-loading' : ''} disabled={busy || blocked || completed} onClick={() => needsCheck ? onVerify() : onClock(clockedIn ? 'out' : 'in')}>{completed ? 'Shift complete' : busy ? 'Checking location…' : needsCheck ? 'Verify office location' : clockedIn ? 'Clock out' : 'Clock in'}</Button>
   </div>;
 }
 
@@ -614,7 +709,7 @@ function KpiLedger({ stats, overview }) {
 }
 
 function CoverageChart({ data = [] }) {
-  return <div className="coverage-chart">{data.map(item => { const value = Number(item.value || 0); const total = Number(item.total || 0); const percent = total ? Math.round(value / total * 100) : 0; return <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${percent}%` }} /></div><strong>{value}/{total}</strong></div>; })}</div>;
+  return <div className="coverage-chart">{data.map(item => { const value = Number(item.value || 0); const total = Number(item.total || 0); const percent = total > 0 ? Math.min(100, Math.max(0, Math.round(value / total * 100))) : 0; return <div key={item.label}><span>{item.label}</span><div><i style={{ transform: `scaleX(${percent / 100})` }} /></div><strong>{value}/{total}</strong></div>; })}</div>;
 }
 
 function AdminDashboardPage({ user, showToast }) {
@@ -650,13 +745,7 @@ function ProfilePage({ user, showToast }) {
   const longEnough = passwordForm.new_password.length >= 12;
   const changed = Boolean(passwordForm.new_password) && passwordForm.new_password !== passwordForm.current_password;
   const matches = Boolean(passwordForm.confirm_password) && passwordForm.new_password === passwordForm.confirm_password;
-  const permissionLabels = {
-    'members:view': 'View member records', 'members:edit': 'Edit member records', 'members:import': 'Import spreadsheets',
-    'members:export': 'Export spreadsheets', 'print:forms': 'Generate member forms', 'finance:view': 'View finance records',
-    'finance:edit': 'Manage payments', 'hr:view': 'View workforce records', 'hr:edit': 'Manage staff profiles',
-    'carding:view': 'View daily carding ledger', 'carding:edit': 'Manage carding and expenses',
-    'settings:manage': 'Manage office location lock', 'users:manage': 'Manage users & roles', 'audit:view': 'Review audit activity'
-  };
+  const permissionLabels = PERMISSION_LABELS;
 
   async function changePassword(event) {
     event.preventDefault();
@@ -702,18 +791,27 @@ function ImportReviewModal({ preview, type = 'members', committing, onClose, onC
   const validIds = useMemo(() => preview.rows.filter(row => row.valid).map(row => row.id), [preview]);
   const [selected, setSelected] = useState(() => new Set(validIds));
   const [page, setPage] = useState(0);
+  const [commitError, setCommitError] = useState('');
+  const commitPending = useRef(false);
+  const closeReview = () => { if (!committing && !commitPending.current) onClose(); };
+  async function commit() {
+    if (committing || commitPending.current || !selected.size) return;
+    commitPending.current = true; setCommitError('');
+    try { await onCommit([...selected]); } catch (error) { setCommitError(error.message); }
+    finally { commitPending.current = false; }
+  }
   const pageSize = 200;
   const pageCount = Math.max(1, Math.ceil(preview.rows.length / pageSize));
   const visibleRows = preview.rows.slice(page * pageSize, (page + 1) * pageSize);
   const allSelected = validIds.length > 0 && validIds.every(id => selected.has(id));
   function toggle(id) { setSelected(current => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; }); }
   function toggleAll() { setSelected(allSelected ? new Set() : new Set(validIds)); }
-  return <div className="modal-layer"><button className="drawer-scrim" onClick={onClose} aria-label="Close import review" /><section className="modal-card import-review" role="dialog" aria-modal="true" aria-labelledby="import-review-title">
-    <header><div><p className="kicker">Migration review</p><h2 id="import-review-title">Choose rows to import</h2><p>{preview.sourceName}</p></div><button type="button" onClick={onClose} aria-label="Close"><X /></button></header>
-    <div className="import-review__summary"><span><strong>{preview.rows.length}</strong> found</span><span className="is-ready"><strong>{preview.valid}</strong> ready</span><span className="is-attention"><strong>{preview.attention}</strong> need attention</span><span><strong>{page + 1}/{pageCount}</strong> pages</span><Button variant="secondary" onClick={toggleAll}>{allSelected ? 'Clear selection' : 'Select all ready'}</Button></div>
-    <div className="import-review__table table-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all valid rows" /></th><th>Source</th>{type === 'members' ? <><th>MRO status</th><th>Member</th><th>Gender</th></> : <><th>Date</th><th>Service / expense</th><th>Cards</th></>}<th>Status</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.id} className={row.valid ? '' : 'import-row--invalid'}><td><input type="checkbox" checked={selected.has(row.id)} disabled={!row.valid} onChange={() => toggle(row.id)} aria-label={`Select source row ${row.sourceRow}`} /></td><td><strong>{row.sheet}</strong><small className="table-subline">Row {row.sourceRow}</small></td>{type === 'members' ? <><td className="mono">{row.reference || '—'}</td><td><strong>{row.fullname || '—'}</strong><small className="table-subline">{row.reference_number || 'No reference number'}</small></td><td>{row.gender || '—'}</td></> : <><td>{formatDate(row.record_date)}</td><td><strong>{row.service_type}</strong><small className="table-subline">{row.category} · {formatMoney(row.net_amount)}</small></td><td>{row.paid_cards} paid · {row.unpaid_cards} unpaid</td></>}<td><StatusBadge tone={row.valid ? 'success' : 'warning'}>{row.valid ? 'Ready' : row.issue}</StatusBadge></td></tr>)}</tbody></table></div>
-    <footer><p>{selected.size} rows selected. Existing or invalid records remain unchecked.</p><div className="import-review__pages"><Button variant="secondary" disabled={page === 0} onClick={() => setPage(value => value - 1)}>Previous</Button><Button variant="secondary" disabled={page >= pageCount - 1} onClick={() => setPage(value => value + 1)}>Next</Button></div><Button variant="secondary" onClick={onClose}>Cancel</Button><Button icon={Upload} disabled={!selected.size || committing} onClick={() => onCommit([...selected])}>{committing ? 'Importing…' : `Import ${selected.size} rows`}</Button></footer>
-  </section></div>;
+  return <ModalFrame labelledBy="import-review-title" onClose={closeReview} busy={committing}><section className="modal-card import-review">
+    <header><div><p className="kicker">Migration review</p><h2 id="import-review-title">Choose rows to import</h2><p>{preview.sourceName}</p></div><button type="button" onClick={closeReview} disabled={committing} aria-label="Close"><X /></button></header><FormError message={commitError} />
+    <div className="import-review__summary"><span><strong>{preview.rows.length}</strong> found</span><span className="is-ready"><strong>{preview.valid}</strong> ready</span><span className="is-attention"><strong>{preview.attention}</strong> need attention</span><span><strong>{page + 1}/{pageCount}</strong> pages</span><Button variant="secondary" onClick={toggleAll} disabled={committing}>{allSelected ? 'Clear selection' : 'Select all ready'}</Button></div>
+    <div className="import-review__table table-scroll"><table className="data-table"><thead><tr><th><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={committing} aria-label="Select all valid rows" /></th><th>Source</th>{type === 'members' ? <><th>MRO status</th><th>Member</th><th>Gender</th></> : <><th>Date</th><th>Service / expense</th><th>Cards</th></>}<th>Status</th></tr></thead><tbody>{visibleRows.map(row => <tr key={row.id} className={row.valid ? '' : 'import-row--invalid'}><td><input type="checkbox" checked={selected.has(row.id)} disabled={!row.valid || committing} onChange={() => toggle(row.id)} aria-label={`Select source row ${row.sourceRow}`} /></td><td><strong>{row.sheet}</strong><small className="table-subline">Row {row.sourceRow}</small></td>{type === 'members' ? <><td className="mono">{row.reference || '—'}</td><td><strong>{row.fullname || '—'}</strong><small className="table-subline">{row.reference_number || 'No reference number'}</small></td><td>{row.gender || '—'}</td></> : <><td>{formatDate(row.record_date)}</td><td><strong>{row.service_type}</strong><small className="table-subline">{row.category} · {formatMoney(row.net_amount)}</small></td><td>{row.paid_cards} paid · {row.unpaid_cards} unpaid</td></>}<td><StatusBadge tone={row.valid ? 'success' : 'warning'}>{row.valid ? 'Ready' : row.issue}</StatusBadge></td></tr>)}</tbody></table></div>
+    <footer><p>{selected.size} rows selected. Existing or invalid records remain unchecked.</p><div className="import-review__pages"><Button variant="secondary" disabled={page === 0 || committing} onClick={() => setPage(value => value - 1)}>Previous</Button><Button variant="secondary" disabled={page >= pageCount - 1 || committing} onClick={() => setPage(value => value + 1)}>Next</Button></div><Button variant="secondary" onClick={closeReview} disabled={committing}>Cancel</Button><Button icon={Upload} disabled={!selected.size || committing} onClick={commit}>{committing ? 'Importing…' : `Import ${selected.size} rows`}</Button></footer>
+  </section></ModalFrame>;
 }
 
 function MembersPage({ user, showToast }) {
@@ -730,21 +828,31 @@ function MembersPage({ user, showToast }) {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const deletePending = useRef(false);
+  const memberRequestId = useRef(0);
   const mayEdit = can(user, 'members:edit');
   const mayPrint = can(user, 'print:forms');
   const mayDelete = user.role === 'admin';
 
-  async function load() {
+  const load = useCallback(async () => {
+    const requestId = ++memberRequestId.current;
     setLoading(true); setLoadError('');
     try {
       const params = new URLSearchParams({ q: query, photo: photoFilter });
-      const data = await api(`/api/members?${params}`); setRows(data.records);
+      const data = await api(`/api/members?${params}`);
+      if (requestId !== memberRequestId.current) return;
+      setRows(data.records);
       const openId = new URLSearchParams(location.search).get('open');
-      if (openId && !editing) setEditing(data.records.find(row => String(row.id) === openId) || null);
-    } catch (error) { setLoadError(error.message); showToast(error.message, 'error'); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { const timer = setTimeout(load, 180); return () => clearTimeout(timer); }, [query, photoFilter, location.search]);
+      if (openId) setEditing(current => current || data.records.find(row => String(row.id) === openId) || null);
+    } catch (error) {
+      if (requestId === memberRequestId.current) { setLoadError(error.message); showToast(error.message, 'error'); }
+    } finally { if (requestId === memberRequestId.current) setLoading(false); }
+  }, [query, photoFilter, location.search, showToast]);
+  useEffect(() => {
+    const timer = setTimeout(load, 180);
+    return () => { clearTimeout(timer); memberRequestId.current += 1; };
+  }, [load]);
 
   async function save(formData, id) {
     try {
@@ -765,7 +873,7 @@ function MembersPage({ user, showToast }) {
   async function commitImport(selectedIds) {
     setImporting(true);
     try { const result = await api('/api/members/import/commit', { method: 'POST', body: JSON.stringify({ batchId: importPreview.batchId, selectedIds }) }); showToast(`${result.imported} selected records imported; ${result.skipped} skipped.`); setImportPreview(null); load(); }
-    catch (error) { showToast(error.message, 'error'); }
+    catch (error) { throw error; }
     finally { setImporting(false); }
   }
 
@@ -778,23 +886,23 @@ function MembersPage({ user, showToast }) {
   }
 
   function requestDelete(member) {
-    setEditing(null); setPendingDelete(member); setDeleteConfirmation('');
+    setEditing(null); setPendingDelete(member); setDeleteConfirmation(''); setDeleteError('');
   }
 
   function closeDelete() {
-    if (deleting) return;
+    if (deletePending.current) return;
     setPendingDelete(null); setDeleteConfirmation('');
   }
 
   async function deleteMember() {
-    if (!pendingDelete) return;
-    setDeleting(true);
+    if (!pendingDelete || deletePending.current) return;
+    deletePending.current = true; setDeleting(true); setDeleteError('');
     try {
       await api(`/api/members/${pendingDelete.id}`, { method: 'DELETE', body: JSON.stringify({ confirmation: deleteConfirmation }) });
       showToast(`${pendingDelete.fullname}'s member record was permanently deleted.`);
       setPendingDelete(null); setDeleteConfirmation(''); load();
-    } catch (error) { showToast(error.message, 'error'); }
-    finally { setDeleting(false); }
+    } catch (error) { setDeleteError(error.message); }
+    finally { deletePending.current = false; setDeleting(false); }
   }
 
   return <>
@@ -828,7 +936,7 @@ function MembersPage({ user, showToast }) {
     </section>
     {editing && <MemberDrawer member={editing} canEdit={mayEdit} canPrint={mayPrint} canDelete={mayDelete} onClose={() => setEditing(null)} onSave={save} onDelete={requestDelete} />}
     {importPreview && <ImportReviewModal preview={importPreview} committing={importing} onClose={() => setImportPreview(null)} onCommit={commitImport} />}
-    {pendingDelete && <div className="modal-layer"><button className="drawer-scrim" onClick={closeDelete} aria-label="Close member deletion confirmation" /><section className="modal-card destructive-dialog member-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-member-title"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent member deletion</p><h2 id="delete-member-title">Delete this member record?</h2></div><button type="button" onClick={closeDelete} disabled={deleting} aria-label="Close"><X /></button></header><p>This cannot be undone. The registry data and uploaded member photo will be permanently removed. A minimal audit event will remain without the member’s name or reference.</p><div className="destructive-dialog__identity"><span className="member-avatar">{pendingDelete.photo_url ? <img src={pendingDelete.photo_url} alt="" /> : initials(pendingDelete.fullname)}</span><span><strong>{pendingDelete.fullname}</strong><small>MRO {pendingDelete.reference}{pendingDelete.reference_number ? ` · Ref ${pendingDelete.reference_number}` : ''}</small></span></div><Field label={<>Type MRO Status <strong className="mono">{pendingDelete.reference}</strong> to confirm</>}><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" autoFocus /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete} disabled={deleting}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== String(pendingDelete.reference).trim().toLowerCase()} onClick={deleteMember}>{deleting ? 'Deleting member…' : 'Permanently delete member'}</Button></footer></section></div>}
+    {pendingDelete && <ModalFrame labelledBy="delete-member-title" onClose={closeDelete} busy={deleting}><section className="modal-card destructive-dialog member-delete-dialog"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent member deletion</p><h2 id="delete-member-title">Delete this member record?</h2></div><button type="button" onClick={closeDelete} disabled={deleting} aria-label="Close"><X /></button></header><FormError message={deleteError} /><p>This cannot be undone. The registry data and uploaded member photo will be permanently removed. A minimal audit event will remain without the member’s name or reference.</p><div className="destructive-dialog__identity"><span className="member-avatar">{pendingDelete.photo_url ? <img src={pendingDelete.photo_url} alt="" /> : initials(pendingDelete.fullname)}</span><span><strong>{pendingDelete.fullname}</strong><small>MRO {pendingDelete.reference}{pendingDelete.reference_number ? ` · Ref ${pendingDelete.reference_number}` : ''}</small></span></div><Field label={<>Type MRO Status <strong className="mono">{pendingDelete.reference}</strong> to confirm</>}><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" disabled={deleting} /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete} disabled={deleting}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== String(pendingDelete.reference).trim().toLowerCase()} onClick={deleteMember}>{deleting ? 'Deleting member…' : 'Permanently delete member'}</Button></footer></section></ModalFrame>}
   </>;
 }
 
@@ -836,19 +944,22 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
   const [form, setForm] = useState({ ...EMPTY_MEMBER, ...member, dob: dateForInput(member.dob), arrival: dateForInput(member.arrival) });
   const [photo, setPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const savePending = useRef(false);
+  const closeDrawer = () => { if (!savePending.current) onClose(); };
   const set = (name, value) => setForm(current => ({ ...current, [name]: value }));
 
   async function submit(event) {
-    event.preventDefault(); if (!canEdit) return;
+    event.preventDefault(); if (!canEdit || savePending.current) return;
+    savePending.current = true; setFormError('');
     const data = new FormData(); Object.entries(form).forEach(([key, value]) => value != null && data.append(key, value)); if (photo) data.append('photo', photo);
-    setSaving(true); try { await onSave(data, member.id); } finally { setSaving(false); }
+    setSaving(true); try { await onSave(data, member.id); } catch (error) { setFormError(error.message); } finally { savePending.current = false; setSaving(false); }
   }
 
-  return <div className="drawer-layer" role="dialog" aria-modal="true" aria-labelledby="member-drawer-title">
-    <button className="drawer-scrim" onClick={onClose} aria-label="Close member record" />
-    <aside className="drawer"><header className="drawer-header"><div><p className="kicker">{member.id ? 'Member record' : 'New record'}</p><h2 id="member-drawer-title">{member.fullname || 'Add member'}</h2>{member.reference && <span className="mono">MRO {member.reference}{member.reference_number ? ` · Ref ${member.reference_number}` : ''}</span>}</div><button onClick={onClose} aria-label="Close"><X /></button></header>
-      <form className="drawer-form" onSubmit={submit}>
-        <section className="photo-editor"><span className="photo-preview">{member.photo_url ? <img src={member.photo_url} alt={`Current photo for ${member.fullname}`} /> : <UserRound size={42} />}</span><div><strong>Member photo</strong><p>JPG or PNG, up to 4 MB. Saved as the MRO status number.</p>{canEdit && <label className="text-link file-button"><Upload size={15} />Choose photo<input type="file" accept="image/jpeg,image/png" onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>}{photo && <small>{photo.name}</small>}</div></section>
+  return <ModalFrame drawer labelledBy="member-drawer-title" onClose={closeDrawer} busy={saving}>
+    <aside className="drawer"><header className="drawer-header"><div><p className="kicker">{member.id ? 'Member record' : 'New record'}</p><h2 id="member-drawer-title">{member.fullname || 'Add member'}</h2>{member.reference && <span className="mono">MRO {member.reference}{member.reference_number ? ` · Ref ${member.reference_number}` : ''}</span>}</div><button onClick={closeDrawer} disabled={saving} aria-label="Close"><X /></button></header>
+      <form className="drawer-form" onSubmit={submit}><FormError message={formError} />
+        <section className="photo-editor"><span className="photo-preview">{member.photo_url ? <img src={member.photo_url} alt={`Current photo for ${member.fullname}`} /> : <UserRound size={42} />}</span><div><strong>Member photo</strong><p>JPG or PNG, up to 4 MB. Linked securely to this member record.</p>{canEdit && <label className="text-link file-button"><Upload size={15} />Choose photo<input type="file" accept="image/jpeg,image/png" onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>}{photo && <small>{photo.name}</small>}</div></section>
         <FormSection title="Core identity"><div className="form-grid">
           <Field label="MRO status number" required><input value={form.reference} onChange={e => set('reference', e.target.value)} required disabled={!canEdit} /></Field>
           <Field label="Reference Number"><input value={form.reference_number || ''} onChange={e => set('reference_number', e.target.value)} disabled={!canEdit} placeholder="Reference shown on printed form…" /></Field>
@@ -868,17 +979,18 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
           <Field label="Ethnicity"><input value={form.ethnicity || ''} onChange={e => set('ethnicity', e.target.value)} disabled={!canEdit} /></Field>
           <Field label="Religion"><input value={form.religion || ''} onChange={e => set('religion', e.target.value)} disabled={!canEdit} /></Field>
         </div></FormSection>
-        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview form' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
+        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" disabled={saving} onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={closeDrawer} disabled={saving}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview form' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
       </form>
     </aside>
-  </div>;
+  </ModalFrame>;
 }
 
 function FormSection({ title, children }) { return <section className="form-section"><h3>{title}</h3>{children}</section>; }
 function Field({ label, required, hint, children }) { return <label className="field"><span>{label}{required && <em>*</em>}</span>{hint && <small>{hint}</small>}{children}</label>; }
 
-function AttendancePage({ showToast }) {
+function AttendancePage({ user, showToast }) {
   const { data, loading, error, reload: load } = useApiResource('/api/attendance');
+  useOfficeDayRefresh(load);
   const [busy, setBusy] = useState(false);
   const [locationProof, setLocationProof] = useState(null);
   async function verifyLocation() {
@@ -895,26 +1007,34 @@ function AttendancePage({ showToast }) {
   }
   if (loading && !data) return <PageState loading title="Attendance" />;
   if (error && !data) return <PageState title="Attendance unavailable" message={error} onRetry={load} />;
-  const needsLocationCheck = data.geofence?.enabled && !locationProof?.verified;
+  const completed = Boolean(data.current?.clock_out);
+  const needsLocationCheck = !completed && data.geofence?.enabled && !locationProof?.verified;
   return <><section className="page-title-row"><div><p className="kicker">Staff operations</p><h2>Clock in & attendance</h2><p>Times are recorded in Asia/Kuala_Lumpur.</p></div></section>
-    <section className="attendance-hero"><div><p className="kicker">Today</p><h3>{new Intl.DateTimeFormat('en-MY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}</h3><p>{data.current?.status === 'clocked_in' ? `Clocked in at ${data.current.clock_in}` : data.current?.clock_out ? `Completed · ${data.current.clock_in}–${data.current.clock_out}` : 'You have not clocked in today.'}</p></div><div className="attendance-hero__actions"><LocationLockStatus geofence={data.geofence} attendance={data.current} locationProof={locationProof} inverse /><Button variant={needsLocationCheck ? 'secondary' : data.current?.status === 'clocked_in' ? 'danger' : 'primary'} icon={busy ? RefreshCw : needsLocationCheck ? MapPin : Clock3} className={busy ? 'is-loading' : ''} disabled={busy || (data.geofence?.enabled && !data.geofence?.configured)} onClick={() => needsLocationCheck ? verifyLocation() : clock(data.current?.status === 'clocked_in' ? 'out' : 'in')}>{busy ? 'Checking location…' : needsLocationCheck ? 'Verify office location' : data.current?.status === 'clocked_in' ? 'Clock out' : 'Clock in'}</Button></div></section>
-    <div className="content-grid"><section className="panel"><div className="panel-heading"><div><p className="kicker">Personal</p><h3>Your recent attendance</h3></div></div><AttendanceTable rows={data.history} /></section><section className="panel"><div className="panel-heading"><div><p className="kicker">Today</p><h3>Team presence</h3></div></div><div className="presence-list">{data.team.map(row => <div key={row.user_id}><span className="avatar avatar--small">{initials(row.name)}</span><span><strong>{row.name}</strong><small>{ROLE_LABELS[row.role]}</small></span><StatusBadge tone={row.clock_in && !row.clock_out ? 'success' : row.clock_out ? 'neutral' : 'warning'}>{row.clock_in && !row.clock_out ? 'In office' : row.clock_out ? 'Clocked out' : 'Not in'}</StatusBadge></div>)}</div></section></div>
+    <section className="attendance-hero"><div><p className="kicker">Today</p><h3>{new Intl.DateTimeFormat('en-MY', { timeZone: 'Asia/Kuala_Lumpur', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}</h3><p>{data.current?.status === 'clocked_in' ? `Clocked in at ${data.current.clock_in}` : data.current?.clock_out ? `Completed · ${data.current.clock_in}–${data.current.clock_out}` : 'You have not clocked in today.'}</p></div><div className="attendance-hero__actions"><LocationLockStatus geofence={data.geofence} attendance={data.current} locationProof={locationProof} inverse /><Button variant={completed || needsLocationCheck ? 'secondary' : data.current?.status === 'clocked_in' ? 'danger' : 'primary'} icon={busy ? RefreshCw : completed ? CheckCircle2 : needsLocationCheck ? MapPin : Clock3} className={busy ? 'is-loading' : ''} disabled={completed || busy || (data.geofence?.enabled && !data.geofence?.configured)} onClick={() => needsLocationCheck ? verifyLocation() : clock(data.current?.status === 'clocked_in' ? 'out' : 'in')}>{completed ? 'Shift complete' : busy ? 'Checking location…' : needsLocationCheck ? 'Verify office location' : data.current?.status === 'clocked_in' ? 'Clock out' : 'Clock in'}</Button></div></section>
+    <div className={can(user, 'hr:view') ? 'content-grid' : 'attendance-personal'}><section className="panel"><div className="panel-heading"><div><p className="kicker">Personal</p><h3>Your recent attendance</h3></div></div><AttendanceTable rows={data.history} /></section>{can(user, 'hr:view') && <section className="panel"><div className="panel-heading"><div><p className="kicker">Today</p><h3>Team presence</h3></div></div><div className="presence-list">{(data.team || []).map(row => <div key={row.user_id}><span className="avatar avatar--small">{initials(row.name)}</span><span><strong>{row.name}</strong><small>{ROLE_LABELS[row.role]}</small></span><StatusBadge tone={row.clock_in && !row.clock_out ? 'success' : row.clock_out ? 'neutral' : 'warning'}>{row.clock_in && !row.clock_out ? 'In office' : row.clock_out ? 'Clocked out' : 'Not in'}</StatusBadge></div>)}</div></section>}</div>
   </>;
 }
 
 function AttendanceTable({ rows }) { return rows?.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Clock in</th><th>Clock out</th><th>Duration</th><th>Location proof</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{formatDate(row.work_date)}</td><td>{row.clock_in || '—'}</td><td>{row.clock_out || '—'}</td><td>{row.duration || '—'}</td><td><div className="attendance-proof"><span className={row.clock_in_location_verified ? 'is-verified' : ''}><MapPin size={13} /> In {row.clock_in_location_verified ? `${row.clock_in_distance_meters} m` : '—'}</span><span className={row.clock_out_location_verified ? 'is-verified' : ''}><MapPin size={13} /> Out {row.clock_out_location_verified ? `${row.clock_out_distance_meters} m` : '—'}</span></div></td></tr>)}</tbody></table></div> : <EmptyState icon={CalendarClock} title="No attendance yet">Your clock activity will appear here.</EmptyState>; }
 
 function CardingPage({ showToast }) {
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(() => officeDate().slice(0, 7));
   const { data, loading, error, reload } = useApiResource(`/api/carding?month=${month}`);
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const savePending = useRef(false);
+  const closeEditor = () => { if (!savePending.current) { setEditing(null); setFormError(''); } };
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState(null);
   const summary = data?.summary || {};
   async function save(event) {
     event.preventDefault();
+    if (savePending.current) return;
+    savePending.current = true; setSaving(true); setFormError('');
     try { const id = editing.id; await api(id ? `/api/carding/${id}` : '/api/carding', { method: id ? 'PUT' : 'POST', body: JSON.stringify(editing) }); showToast(id ? 'Carding entry updated.' : 'Daily carding entry added.'); setEditing(null); reload(); }
-    catch (requestError) { showToast(requestError.message, 'error'); }
+    catch (requestError) { setFormError(requestError.message); }
+    finally { savePending.current = false; setSaving(false); }
   }
   async function previewWorkbook(event) {
     const file = event.target.files?.[0]; if (!file) return;
@@ -926,15 +1046,15 @@ function CardingPage({ showToast }) {
   async function commitImport(selectedIds) {
     setImporting(true);
     try { const result = await api('/api/carding/import/commit', { method: 'POST', body: JSON.stringify({ batchId: importPreview.batchId, selectedIds }) }); showToast(`${result.imported} selected daily rows imported; ${result.skipped} skipped.`); setImportPreview(null); reload(); }
-    catch (requestError) { showToast(requestError.message, 'error'); }
+    catch (requestError) { throw requestError; }
     finally { setImporting(false); }
   }
   if (loading && !data) return <PageState loading title="Daily carding" />;
   if (error && !data) return <PageState title="Daily carding unavailable" message={error} onRetry={reload} />;
-  return <><section className="page-title-row"><div><p className="kicker">Card printing operations</p><h2>Daily carding & expenses</h2><p>Record paid and unpaid cards, service rates, other income and operating expenses.</p></div><div className="title-actions"><input className="month-control" type="month" value={month} onChange={event => setMonth(event.target.value)} /><label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Preparing…' : 'Review carding workbook'}<input type="file" accept=".xlsx" onChange={previewWorkbook} disabled={importing} /></label><Button icon={Plus} onClick={() => setEditing({ ...EMPTY_CARDING })}>Add daily entry</Button></div></section>
+  return <><section className="page-title-row"><div><p className="kicker">Card printing operations</p><h2>Daily carding & expenses</h2><p>Record paid and unpaid cards, service rates, other income and operating expenses.</p></div><div className="title-actions"><input className="month-control" type="month" aria-label="Carding month" value={month} onChange={event => setMonth(event.target.value)} /><label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Preparing…' : 'Review carding workbook'}<input type="file" accept=".xlsx" onChange={previewWorkbook} disabled={importing} /></label><Button icon={Plus} onClick={() => setEditing({ ...EMPTY_CARDING, record_date: officeDate() })}>Add daily entry</Button></div></section>
     <section className="admin-stat-strip carding-stat-strip" aria-label="Daily carding summary"><div><span>Paid cards</span><strong>{summary.paidCards ?? 0}</strong><small>Issued and paid</small></div><div><span>Unpaid cards</span><strong>{summary.unpaidCards ?? 0}</strong><small>Follow-up required</small></div><div><span>Expenses</span><strong>{formatMoney(summary.expenses)}</strong><small>Recorded operating costs</small></div><div><span>Net position</span><strong>{formatMoney(summary.net)}</strong><small>{summary.entries ?? 0} ledger entries</small></div></section>
     <section className="panel records-panel"><div className="panel-heading"><div><p className="kicker">Daily ledger</p><h3>Card printing activity</h3></div><span className="record-count">{data?.records?.length || 0} entries</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Service / expense</th><th>Paid</th><th>Unpaid</th><th>Rate / amount</th><th>Net</th><th>Notes</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>{(data?.records || []).map(row => <tr key={row.id}><td>{formatDate(row.record_date)}</td><td><StatusBadge tone={row.category === 'expense' ? 'warning' : row.category === 'income' ? 'success' : 'blue'}>{row.category}</StatusBadge></td><td><strong>{row.service_type}</strong><small className="table-subline">{row.payment_method}</small></td><td>{row.paid_cards}</td><td>{row.unpaid_cards}</td><td>{row.category === 'service' ? formatMoney(row.rate) : formatMoney(row.amount)}</td><td><strong>{formatMoney(row.net_amount)}</strong></td><td className="notes-cell">{row.notes || row.source_name || '—'}</td><td><div className="row-actions"><button onClick={() => setEditing({ ...row, record_date: dateForInput(row.record_date) })} aria-label={`Edit ${row.service_type}`}><Pencil size={17} /></button></div></td></tr>)}</tbody></table>{!data?.records?.length && <EmptyState icon={FileCheck2} title="No carding entries">Add today’s card printing activity or review-import the office workbook.</EmptyState>}</div></section>
-    {editing && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setEditing(null)} aria-label="Close daily entry" /><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Daily ledger entry</p><h2>{editing.id ? 'Edit carding entry' : 'Add carding entry'}</h2></div><button type="button" onClick={() => setEditing(null)} aria-label="Close"><X /></button></header><div className="form-grid"><Field label="Date" required><input type="date" value={editing.record_date || ''} onChange={e => setEditing({ ...editing, record_date: e.target.value })} required /></Field><Field label="Entry type"><select value={editing.category} onChange={e => setEditing({ ...editing, category: e.target.value })}><option value="service">Carding service</option><option value="income">Other income</option><option value="expense">Expense</option></select></Field><Field label="Service or expense type" required><input value={editing.service_type || ''} onChange={e => setEditing({ ...editing, service_type: e.target.value })} list="carding-services" required /><datalist id="carding-services"><option>MRO New</option><option>MRO Renew</option><option>MRO Late Fine</option><option>MRO Care</option><option>Marriage Cert</option><option>Donation</option><option>Received (prev month)</option><option>Card Delivery</option><option>Other Expense</option></datalist></Field><Field label="Payment method"><select value={editing.payment_method || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_method: e.target.value })}><option>Not recorded</option><option>Cash</option><option>Bank transfer</option><option>E-wallet</option><option>Other</option></select></Field>{editing.category === 'service' ? <><Field label="Paid cards"><input type="number" min="0" value={editing.paid_cards ?? 0} onChange={e => setEditing({ ...editing, paid_cards: e.target.value })} /></Field><Field label="Unpaid cards"><input type="number" min="0" value={editing.unpaid_cards ?? 0} onChange={e => setEditing({ ...editing, unpaid_cards: e.target.value })} /></Field><Field label="Rate per card (RM)"><input type="number" min="0" step="0.01" value={editing.rate ?? 0} onChange={e => setEditing({ ...editing, rate: e.target.value })} /></Field></> : <Field label={`${editing.category === 'expense' ? 'Expense' : 'Income'} amount (RM)`}><input type="number" min="0" step="0.01" value={editing.amount ?? 0} onChange={e => setEditing({ ...editing, amount: e.target.value })} /></Field>}</div><Field label="Notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field><footer><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button type="submit">Save entry</Button></footer></form></div>}
+    {editing && <ModalFrame labelledBy="carding-editor-title" onClose={closeEditor} busy={saving}><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Daily ledger entry</p><h2 id="carding-editor-title">{editing.id ? 'Edit carding entry' : 'Add carding entry'}</h2></div><button type="button" onClick={closeEditor} disabled={saving} aria-label="Close"><X /></button></header><FormError message={formError} /><fieldset className="form-fields" disabled={saving}><div className="form-grid"><Field label="Date" required><input type="date" value={editing.record_date || ''} onChange={e => setEditing({ ...editing, record_date: e.target.value })} required /></Field><Field label="Entry type"><select value={editing.category} onChange={e => setEditing({ ...editing, category: e.target.value })}><option value="service">Carding service</option><option value="income">Other income</option><option value="expense">Expense</option></select></Field><Field label="Service or expense type" required><input value={editing.service_type || ''} onChange={e => setEditing({ ...editing, service_type: e.target.value })} list="carding-services" required /><datalist id="carding-services"><option>MRO New</option><option>MRO Renew</option><option>MRO Late Fine</option><option>MRO Care</option><option>Marriage Cert</option><option>Donation</option><option>Received (prev month)</option><option>Card Delivery</option><option>Other Expense</option></datalist></Field><Field label="Payment method"><select value={editing.payment_method || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_method: e.target.value })}><option>Not recorded</option><option>Cash</option><option>Bank transfer</option><option>E-wallet</option><option>Other</option></select></Field>{editing.category === 'service' ? <><Field label="Paid cards"><input type="number" min="0" value={editing.paid_cards ?? 0} onChange={e => setEditing({ ...editing, paid_cards: e.target.value })} /></Field><Field label="Unpaid cards"><input type="number" min="0" value={editing.unpaid_cards ?? 0} onChange={e => setEditing({ ...editing, unpaid_cards: e.target.value })} /></Field><Field label="Rate per card (RM)"><input type="number" min="0" step="0.01" value={editing.rate ?? 0} onChange={e => setEditing({ ...editing, rate: e.target.value })} /></Field></> : <Field label={`${editing.category === 'expense' ? 'Expense' : 'Income'} amount (RM)`}><input type="number" min="0" step="0.01" value={editing.amount ?? 0} onChange={e => setEditing({ ...editing, amount: e.target.value })} /></Field>}</div><Field label="Notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field></fieldset><footer><Button type="button" variant="secondary" onClick={closeEditor} disabled={saving}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save entry'}</Button></footer></form></ModalFrame>}
     {importPreview && <ImportReviewModal preview={importPreview} type="carding" committing={importing} onClose={() => setImportPreview(null)} onCommit={commitImport} />}
   </>;
 }
@@ -966,17 +1086,24 @@ function OfficeSettingsPage({ showToast }) {
 function FinancePage({ showToast }) {
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const savePending = useRef(false);
+  const closeEditor = () => { if (!savePending.current) { setEditing(null); setFormError(''); } };
   const [importing, setImporting] = useState(false);
   const { data, loading, error, reload } = useApiResource(`/api/finance?q=${encodeURIComponent(query)}`);
   const summary = data?.summary || {};
 
   async function save(event) {
     event.preventDefault();
+    if (savePending.current) return;
+    savePending.current = true; setSaving(true); setFormError('');
     try {
       const id = editing.id;
       await api(id ? `/api/finance/${id}` : '/api/finance', { method: id ? 'PUT' : 'POST', body: JSON.stringify(editing) });
       showToast(id ? 'Finance record updated.' : 'Finance record added.'); setEditing(null); reload();
-    } catch (requestError) { showToast(requestError.message, 'error'); }
+    } catch (requestError) { setFormError(requestError.message); }
+    finally { savePending.current = false; setSaving(false); }
   }
 
   async function importWorkbook(event) {
@@ -989,93 +1116,171 @@ function FinancePage({ showToast }) {
 
   if (loading && !data) return <PageState loading title="Finance records" />;
   if (error && !data) return <PageState title="Finance records unavailable" message={error} onRetry={reload} />;
-  return <><section className="page-title-row"><div><p className="kicker">Financial control</p><h2>Payments & banked-in records</h2><p>Track the Concern Person, their number, payment amount, deductions, method and status.</p></div><div className="title-actions"><label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Importing…' : 'Import carding workbook'}<input type="file" accept=".xlsx" onChange={importWorkbook} disabled={importing} /></label><Button icon={Plus} onClick={() => setEditing({ ...EMPTY_FINANCE })}>Add payment</Button></div></section>
+  return <><section className="page-title-row"><div><p className="kicker">Financial control</p><h2>Payments & banked-in records</h2><p>Track the Concern Person, their number, payment amount, deductions, method and status.</p></div><div className="title-actions"><label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Importing…' : 'Import carding workbook'}<input type="file" accept=".xlsx" onChange={importWorkbook} disabled={importing} /></label><Button icon={Plus} onClick={() => setEditing({ ...EMPTY_FINANCE, payment_date: officeDate() })}>Add payment</Button></div></section>
     <section className="admin-stat-strip finance-stat-strip" aria-label="Finance summary"><div><span>Payments</span><strong>{summary.transactions ?? 0}</strong><small>Recorded this month</small></div><div><span>Gross amount</span><strong>{formatMoney(summary.amount)}</strong><small>Before deductions</small></div><div><span>Deductions</span><strong>{formatMoney(summary.deductions)}</strong><small>Recorded this month</small></div><div><span>Net received</span><strong>{formatMoney(summary.net)}</strong><small>{summary.pending ?? 0} pending or partial</small></div></section>
     <section className="analytics-layout finance-analytics"><article className="analytics-panel"><header><div><p className="kicker">Cash movement</p><h3>Net received</h3></div><span>Last 6 months</span></header><AreaTrendChart data={data?.charts?.trend} label="Net payment amount during the last six months" /></article><article className="analytics-panel"><header><div><p className="kicker">Control gap</p><h3>Payment methods</h3></div></header><BreakdownLedger groups={[{ title: 'Method recorded', items: data?.charts?.methods || [] }]} /></article></section>
     <section className="panel records-panel finance-records"><div className="records-toolbar"><label className="search-control"><Search size={18} /><span className="sr-only">Search finance records</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search Concern Person, number, service or notes…" /></label><span className="record-count">{data?.records?.length || 0} records</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Concern Person</th><th>Concern Person’s number</th><th>Payment</th><th>Method</th><th>Status</th><th>Notes</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>{(data?.records || []).map(row => <tr key={row.id}><td>{formatDate(row.payment_date)}</td><td><strong>{row.concern_person || '—'}</strong><small className="table-subline">{row.service_type || 'No service type'}</small></td><td>{row.concern_number || '—'}</td><td><strong>{formatMoney(row.net_amount)}</strong><small className="table-subline">Gross {formatMoney(row.amount)}</small></td><td>{row.payment_method}</td><td><StatusBadge tone={row.payment_status === 'Paid' ? 'success' : row.payment_status === 'Pending' ? 'warning' : 'neutral'}>{row.payment_status}</StatusBadge></td><td className="notes-cell">{row.notes || '—'}</td><td><div className="row-actions"><button onClick={() => setEditing({ ...row, payment_date: dateForInput(row.payment_date) })} aria-label={`Edit payment for ${row.concern_person || row.concern_number}`}><Pencil size={17} /></button></div></td></tr>)}</tbody></table>{!data?.records?.length && <EmptyState icon={BriefcaseBusiness} title="No payment records">Add a payment or import the MRO carding workbook.</EmptyState>}</div></section>
-    {editing && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setEditing(null)} aria-label="Close finance form" /><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Finance record</p><h2>{editing.id ? 'Edit payment' : 'Add payment'}</h2></div><button type="button" onClick={() => setEditing(null)} aria-label="Close"><X /></button></header><div className="form-grid"><Field label="Payment date" required><input type="date" value={editing.payment_date || ''} onChange={e => setEditing({ ...editing, payment_date: e.target.value })} required /></Field><Field label="Service type"><input value={editing.service_type || ''} onChange={e => setEditing({ ...editing, service_type: e.target.value })} placeholder="MRO New, MRO Renew, Donation…" /></Field><Field label="Concern Person"><input value={editing.concern_person || ''} onChange={e => setEditing({ ...editing, concern_person: e.target.value })} /></Field><Field label="Concern Person’s number"><input value={editing.concern_number || ''} onChange={e => setEditing({ ...editing, concern_number: e.target.value })} /></Field><Field label="Payment amount (RM)" required><input type="number" min="0" step="0.01" value={editing.amount ?? ''} onChange={e => setEditing({ ...editing, amount: e.target.value, net_amount: '' })} required /></Field><Field label="Deduction (RM)"><input type="number" min="0" step="0.01" value={editing.deduction ?? ''} onChange={e => setEditing({ ...editing, deduction: e.target.value, net_amount: '' })} /></Field><Field label="Payment method"><select value={editing.payment_method || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_method: e.target.value })}><option>Not recorded</option><option>Cash</option><option>Bank transfer</option><option>E-wallet</option><option>Cheque</option><option>Other</option></select></Field><Field label="Payment status"><select value={editing.payment_status || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_status: e.target.value })}><option>Not recorded</option><option>Paid</option><option>Partial</option><option>Pending</option></select></Field></div><Field label="Notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field><footer><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button type="submit">Save payment</Button></footer></form></div>}
+    {editing && <ModalFrame labelledBy="finance-editor-title" onClose={closeEditor} busy={saving}><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Finance record</p><h2 id="finance-editor-title">{editing.id ? 'Edit payment' : 'Add payment'}</h2></div><button type="button" onClick={closeEditor} disabled={saving} aria-label="Close"><X /></button></header><FormError message={formError} /><fieldset className="form-fields" disabled={saving}><div className="form-grid"><Field label="Payment date" required><input type="date" value={editing.payment_date || ''} onChange={e => setEditing({ ...editing, payment_date: e.target.value })} required /></Field><Field label="Service type"><input value={editing.service_type || ''} onChange={e => setEditing({ ...editing, service_type: e.target.value })} placeholder="MRO New, MRO Renew, Donation…" /></Field><Field label="Concern Person"><input value={editing.concern_person || ''} onChange={e => setEditing({ ...editing, concern_person: e.target.value })} /></Field><Field label="Concern Person’s number"><input value={editing.concern_number || ''} onChange={e => setEditing({ ...editing, concern_number: e.target.value })} /></Field><Field label="Payment amount (RM)" required><input type="number" min="0" step="0.01" value={editing.amount ?? ''} onChange={e => setEditing({ ...editing, amount: e.target.value, net_amount: '' })} required /></Field><Field label="Deduction (RM)"><input type="number" min="0" step="0.01" value={editing.deduction ?? ''} onChange={e => setEditing({ ...editing, deduction: e.target.value, net_amount: '' })} /></Field><Field label="Payment method"><select value={editing.payment_method || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_method: e.target.value })}><option>Not recorded</option><option>Cash</option><option>Bank transfer</option><option>E-wallet</option><option>Cheque</option><option>Other</option></select></Field><Field label="Payment status"><select value={editing.payment_status || 'Not recorded'} onChange={e => setEditing({ ...editing, payment_status: e.target.value })}><option>Not recorded</option><option>Paid</option><option>Partial</option><option>Pending</option></select></Field></div><Field label="Notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field></fieldset><footer><Button type="button" variant="secondary" onClick={closeEditor} disabled={saving}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save payment'}</Button></footer></form></ModalFrame>}
   </>;
 }
 
 function HrPage({ showToast }) {
   const { data, loading, error, reload } = useApiResource('/api/hr/staff');
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const savePending = useRef(false);
+  const closeEditor = () => { if (!savePending.current) { setEditing(null); setFormError(''); } };
   const staff = data?.staff || [];
   const partTime = staff.filter(item => item.employment_type === 'part_time').length;
   const hours = staff.reduce((sum, item) => sum + Number(item.hours_this_month || 0), 0);
 
   async function save(event) {
     event.preventDefault();
+    if (savePending.current) return;
+    savePending.current = true; setSaving(true); setFormError('');
     try { await api(`/api/hr/staff/${editing.id}`, { method: 'PUT', body: JSON.stringify(editing) }); showToast('Staff profile updated.'); setEditing(null); reload(); }
-    catch (requestError) { showToast(requestError.message, 'error'); }
+    catch (requestError) { setFormError(requestError.message); }
+    finally { savePending.current = false; setSaving(false); }
   }
 
   if (loading && !data) return <PageState loading title="HR and staff" />;
   if (error && !data) return <PageState title="HR and staff unavailable" message={error} onRetry={reload} />;
   return <><section className="page-title-row"><div><p className="kicker">People operations</p><h2>HR & staff management</h2><p>Maintain employment type, job assignment and a practical attendance KPI view.</p></div></section><section className="admin-stat-strip hr-stat-strip" aria-label="Workforce summary"><div><span>Active staff</span><strong>{staff.filter(item => item.active).length}</strong><small>Enabled staff accounts</small></div><div><span>Part-time</span><strong>{partTime}</strong><small>Employment profiles</small></div><div><span>Completed shifts</span><strong>{staff.reduce((sum, item) => sum + Number(item.completed_shifts || 0), 0)}</strong><small>Current month</small></div><div><span>Hours recorded</span><strong>{hours.toFixed(1)}</strong><small>Completed shifts this month</small></div></section>
     <section className="panel records-panel"><div className="panel-heading"><div><p className="kicker">Workforce roster</p><h3>Staff profiles & KPI</h3></div><span className="record-count">{staff.length} staff</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>Staff</th><th>Role</th><th>Employment</th><th>Job / department</th><th>Days</th><th>Completed</th><th>Hours</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>{staff.map(row => <tr key={row.id}><td><div className="member-cell"><span className="avatar avatar--small">{initials(row.name)}</span><span><strong>{row.name}</strong><small>{row.email}</small></span></div></td><td>{ROLE_LABELS[row.role]}</td><td><StatusBadge tone={row.employment_type === 'part_time' ? 'blue' : 'neutral'}>{EMPLOYMENT_LABELS[row.employment_type]}</StatusBadge></td><td><strong>{row.job_title || 'Not assigned'}</strong><small className="table-subline">{row.department || 'No department'}</small></td><td>{row.days_this_month}</td><td>{row.completed_shifts}</td><td>{row.hours_this_month}</td><td><div className="row-actions"><button onClick={() => setEditing({ ...row, start_date: dateForInput(row.start_date) })} aria-label={`Edit HR profile for ${row.name}`}><Pencil size={17} /></button></div></td></tr>)}</tbody></table></div></section>
-    {editing && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setEditing(null)} aria-label="Close HR form" /><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Staff profile</p><h2>{editing.name}</h2></div><button type="button" onClick={() => setEditing(null)} aria-label="Close"><X /></button></header><div className="form-grid"><Field label="Employment type"><select value={editing.employment_type} onChange={e => setEditing({ ...editing, employment_type: e.target.value })}>{Object.entries(EMPLOYMENT_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field><Field label="Weekly target hours"><input type="number" min="1" max="168" step="0.5" value={editing.weekly_target_hours || 40} onChange={e => setEditing({ ...editing, weekly_target_hours: e.target.value })} /></Field><Field label="Job title"><input value={editing.job_title || ''} onChange={e => setEditing({ ...editing, job_title: e.target.value })} /></Field><Field label="Department"><input value={editing.department || ''} onChange={e => setEditing({ ...editing, department: e.target.value })} /></Field><Field label="Start date"><input type="date" value={editing.start_date || ''} onChange={e => setEditing({ ...editing, start_date: e.target.value })} /></Field></div><Field label="HR notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field><footer><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancel</Button><Button type="submit">Save staff profile</Button></footer></form></div>}
+    {editing && <ModalFrame labelledBy="hr-editor-title" onClose={closeEditor} busy={saving}><form className="modal-card modal-card--wide" onSubmit={save}><header><div><p className="kicker">Staff profile</p><h2 id="hr-editor-title">{editing.name}</h2></div><button type="button" onClick={closeEditor} disabled={saving} aria-label="Close"><X /></button></header><FormError message={formError} /><fieldset className="form-fields" disabled={saving}><div className="form-grid"><Field label="Employment type"><select value={editing.employment_type} onChange={e => setEditing({ ...editing, employment_type: e.target.value })}>{Object.entries(EMPLOYMENT_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field><Field label="Weekly target hours"><input type="number" min="1" max="168" step="0.5" value={editing.weekly_target_hours || 40} onChange={e => setEditing({ ...editing, weekly_target_hours: e.target.value })} /></Field><Field label="Job title"><input value={editing.job_title || ''} onChange={e => setEditing({ ...editing, job_title: e.target.value })} /></Field><Field label="Department"><input value={editing.department || ''} onChange={e => setEditing({ ...editing, department: e.target.value })} /></Field><Field label="Start date"><input type="date" value={editing.start_date || ''} onChange={e => setEditing({ ...editing, start_date: e.target.value })} /></Field></div><Field label="HR notes"><textarea rows="3" value={editing.notes || ''} onChange={e => setEditing({ ...editing, notes: e.target.value })} /></Field></fieldset><footer><Button type="button" variant="secondary" onClick={closeEditor} disabled={saving}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save staff profile'}</Button></footer></form></ModalFrame>}
   </>;
 }
 
 function UsersPage({ currentUser, showToast, onCurrentUserUpdated }) {
   const { data, loading, error, reload: load } = useApiResource('/api/users');
   const users = data?.users || [];
+  const roles = data?.roles || [];
+  const assignableRoles = roles.filter(role => role.assignable);
+  const [query, setQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', role: 'data_management', password: '' });
+  const [creating, setCreating] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [savingUser, setSavingUser] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const assignableRoles = Object.entries(ROLE_LABELS).filter(([key]) => currentUser.role === 'admin' || key !== 'admin');
-  if (loading && !data) return <PageState loading title="Users and roles" />;
-  if (error && !data) return <PageState title="Users and roles unavailable" message={error} onRetry={load} />;
+  const [resetUser, setResetUser] = useState(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [formError, setFormError] = useState('');
+  const requestPending = useRef(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredUsers = users.filter(user => {
+    const status = !user.active ? 'inactive' : user.must_change_password ? 'pending' : 'active';
+    return (!normalizedQuery || `${user.name} ${user.email}`.toLowerCase().includes(normalizedQuery))
+      && (roleFilter === 'all' || user.role === roleFilter)
+      && (statusFilter === 'all' || status === statusFilter);
+  });
+  const busy = creating || savingUser || deleting || resetting;
+  function closeDialog() {
+    if (busy) return;
+    setOpen(false); setEditingUser(null); setPendingDelete(null); setResetUser(null);
+    setDeleteConfirmation(''); setResetPassword(''); setFormError('');
+    setForm({ name: '', email: '', role: 'data_management', password: '' });
+  }
+  function clearFilters() { setQuery(''); setRoleFilter('all'); setStatusFilter('all'); }
+  function startRequest(setBusy) {
+    if (requestPending.current) return false;
+    requestPending.current = true; setBusy(true); setFormError(''); return true;
+  }
+  function finishRequest(setBusy) { requestPending.current = false; setBusy(false); }
   async function add(event) {
     event.preventDefault();
+    if (!startRequest(setCreating)) return;
     try {
       await api('/api/users', { method: 'POST', body: JSON.stringify(form) });
       showToast('User created. They must change the temporary password at first sign-in.');
       setOpen(false); setForm({ name: '', email: '', role: 'data_management', password: '' }); load();
-    } catch (error) { showToast(error.message, 'error'); }
+    } catch (requestError) { setFormError(requestError.message); }
+    finally { finishRequest(setCreating); }
   }
   async function saveUser(event) {
     event.preventDefault();
-    if (!editingUser) return;
-    setSavingUser(true);
-    const body = currentUser.role === 'admin'
-      ? { name: editingUser.name, email: editingUser.email, role: editingUser.role, active: Boolean(editingUser.active) }
-      : { role: editingUser.role };
+    if (!editingUser || !startRequest(setSavingUser)) return;
+    const capabilities = editingUser.capabilities || {};
+    const body = {
+      ...(capabilities.editDetails ? { name: editingUser.name, email: editingUser.email } : {}),
+      ...(capabilities.changeRole ? { role: editingUser.role } : {}),
+      ...(capabilities.changeStatus ? { active: Boolean(editingUser.active) } : {})
+    };
     try {
       const result = await api(`/api/users/${editingUser.id}`, { method: 'PUT', body: JSON.stringify(body) });
       if (Number(editingUser.id) === Number(currentUser.id)) onCurrentUserUpdated?.(result.user);
       showToast(`${editingUser.name}'s account was updated.`);
       setEditingUser(null); load();
-    } catch (error) { showToast(error.message, 'error'); }
-    finally { setSavingUser(false); }
+    } catch (requestError) { setFormError(requestError.message); }
+    finally { finishRequest(setSavingUser); }
   }
-  function closeDelete() { setPendingDelete(null); setDeleteConfirmation(''); }
-  async function deleteUser() {
-    if (!pendingDelete) return;
-    setDeleting(true);
+  async function deleteUser(event) {
+    event.preventDefault();
+    if (!pendingDelete?.capabilities?.delete || deleteConfirmation.trim().toLowerCase() !== pendingDelete.email.toLowerCase() || !startRequest(setDeleting)) return;
     try {
-      await api(`/api/users/${pendingDelete.id}`, { method: 'DELETE' });
+      await api(`/api/users/${pendingDelete.id}`, { method: 'DELETE', body: JSON.stringify({ confirmation: deleteConfirmation.trim() }) });
       showToast(`${pendingDelete.name}'s access was deleted. Historical records were retained.`);
-      closeDelete(); load();
-    } catch (error) { showToast(error.message, 'error'); }
-    finally { setDeleting(false); }
+      setPendingDelete(null); setDeleteConfirmation(''); load();
+    } catch (requestError) { setFormError(requestError.message); }
+    finally { finishRequest(setDeleting); }
   }
-  return <><section className="page-title-row"><div><p className="kicker">Access control</p><h2>Users & roles</h2><p>Give each staff member only the access required for their work.</p></div><Button icon={Plus} onClick={() => setOpen(true)}>Add user</Button></section>
-    <section className="panel"><div className="panel-heading"><div><p className="kicker">Active access</p><h3>Staff accounts</h3></div><StatusBadge>{users.length} users</StatusBadge></div><div className="table-scroll"><table className="data-table users-table"><thead><tr><th>User</th><th>Role</th><th>Access summary</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><div className="member-cell"><span className="avatar avatar--small">{initials(user.name)}</span><span><strong>{user.name}{Number(user.id) === Number(currentUser.id) && <small className="current-user-label">You</small>}</strong><small>{user.email}</small></span></div></td><td><strong className="user-role-label">{ROLE_LABELS[user.role]}</strong></td><td>{user.access_summary}</td><td>{!user.active ? <StatusBadge>Inactive</StatusBadge> : user.must_change_password ? <StatusBadge tone="warning">Password change pending</StatusBadge> : <StatusBadge tone="success">Active</StatusBadge>}</td><td className="table-action-cell"><div className="user-row-actions"><button className="icon-action" type="button" onClick={() => setEditingUser({ id: user.id, name: user.name, email: user.email, role: user.role, active: Boolean(user.active) })} disabled={currentUser.role !== 'admin' && user.role === 'admin'} title={currentUser.role !== 'admin' && user.role === 'admin' ? 'Only an administrator can edit this account' : `Edit ${user.name}`} aria-label={`Edit ${user.name}`}><Pencil size={16} /></button>{currentUser.role === 'admin' && <button className="icon-action icon-action--danger" type="button" onClick={() => { setPendingDelete(user); setDeleteConfirmation(''); }} disabled={Number(user.id) === Number(currentUser.id)} title={Number(user.id) === Number(currentUser.id) ? 'You cannot delete your current account' : `Delete ${user.name}`} aria-label={`Delete ${user.name}`}><Trash2 size={16} /></button>}</div></td></tr>)}</tbody></table></div></section>
-    <section className="role-grid">{Object.entries(ROLE_LABELS).map(([key, label]) => <article key={key}><span className="role-icon"><ShieldCheck size={18} /></span><h3>{label}</h3><p>{roleSummary(key)}</p></article>)}</section>
-    {open && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setOpen(false)} aria-label="Close" /><form className="modal-card" onSubmit={add} role="dialog" aria-modal="true" aria-labelledby="add-user-title"><header><div><p className="kicker">New account</p><h2 id="add-user-title">Add staff user</h2><p>The user will replace this temporary password at first sign-in.</p></div><button type="button" onClick={() => setOpen(false)} aria-label="Close"><X /></button></header><Field label="Full name" required><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} autoComplete="off" required /></Field><Field label="Email" required><input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} autoComplete="off" required /></Field><Field label="Role"><select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>{assignableRoles.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field><Field label="Temporary password" hint="At least 12 characters. Share it through a secure channel."><input type="password" minLength="12" maxLength="200" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required /></Field><footer><Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button><Button type="submit">Create user</Button></footer></form></div>}
-    {editingUser && <div className="modal-layer"><button className="drawer-scrim" onClick={() => setEditingUser(null)} aria-label="Close user editor" /><form className="modal-card user-edit-dialog" onSubmit={saveUser} role="dialog" aria-modal="true" aria-labelledby="edit-user-title"><header><div><p className="kicker">Account details</p><h2 id="edit-user-title">Edit staff user</h2><p>Update identity, access role and sign-in status for this staff account.</p></div><button type="button" onClick={() => setEditingUser(null)} aria-label="Close"><X /></button></header><div className="user-edit-identity"><span className="avatar">{initials(editingUser.name)}</span><span><strong>{editingUser.name || 'Staff account'}</strong><small>{editingUser.email || 'No email entered'}</small></span></div><div className="form-grid"><Field label="Full name" required hint={currentUser.role !== 'admin' ? 'Only administrators can change identity details.' : ''}><input value={editingUser.name} onChange={e => setEditingUser({ ...editingUser, name: e.target.value })} disabled={currentUser.role !== 'admin'} maxLength="160" required /></Field><Field label="Email address" required><input type="email" value={editingUser.email} onChange={e => setEditingUser({ ...editingUser, email: e.target.value })} disabled={currentUser.role !== 'admin'} maxLength="254" required /></Field><Field label="Role"><select value={editingUser.role} onChange={e => setEditingUser({ ...editingUser, role: e.target.value })} disabled={currentUser.role !== 'admin' && editingUser.role === 'admin'}>{(editingUser.role === 'admin' && currentUser.role !== 'admin' ? Object.entries(ROLE_LABELS) : assignableRoles).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field></div>{currentUser.role === 'admin' && <label className="account-status-control"><input type="checkbox" checked={editingUser.active} disabled={Number(editingUser.id) === Number(currentUser.id)} onChange={e => setEditingUser({ ...editingUser, active: e.target.checked })} /><span><strong>Account active</strong><small>{Number(editingUser.id) === Number(currentUser.id) ? 'You cannot deactivate the account you are currently using.' : 'Inactive users cannot sign in. Deactivation also ends their current sessions.'}</small></span><StatusBadge tone={editingUser.active ? 'success' : 'neutral'}>{editingUser.active ? 'Active' : 'Inactive'}</StatusBadge></label>}<footer><Button type="button" variant="secondary" onClick={() => setEditingUser(null)}>Cancel</Button><Button type="submit" icon={Pencil} disabled={savingUser || !editingUser.name.trim() || !editingUser.email.includes('@')}>{savingUser ? 'Saving changes…' : 'Save user changes'}</Button></footer></form></div>}
-    {pendingDelete && <div className="modal-layer"><button className="drawer-scrim" onClick={closeDelete} aria-label="Close delete confirmation" /><section className="modal-card destructive-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-user-title"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent access removal</p><h2 id="delete-user-title">Delete {pendingDelete.name}?</h2></div><button type="button" onClick={closeDelete} aria-label="Close"><X /></button></header><p>This immediately signs the user out and removes their staff access. Attendance and audit history remain available for organizational records.</p><div className="destructive-dialog__identity"><span className="avatar avatar--small">{initials(pendingDelete.name)}</span><span><strong>{pendingDelete.name}</strong><small>{pendingDelete.email} · {ROLE_LABELS[pendingDelete.role]}</small></span></div><Field label={<>Type <strong>{pendingDelete.email}</strong> to confirm</>}><input value={deleteConfirmation} onChange={e => setDeleteConfirmation(e.target.value)} autoComplete="off" /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== pendingDelete.email.toLowerCase()} onClick={deleteUser}>{deleting ? 'Deleting…' : 'Delete user'}</Button></footer></section></div>}
+  async function resetUserPassword(event) {
+    event.preventDefault();
+    if (!resetUser?.capabilities?.resetPassword || !startRequest(setResetting)) return;
+    try {
+      await api(`/api/users/${resetUser.id}/reset-password`, { method: 'POST', body: JSON.stringify({ password: resetPassword }) });
+      showToast(`${resetUser.name}'s sessions ended. They must replace the temporary password at sign-in.`);
+      setResetUser(null); setResetPassword(''); load();
+    } catch (requestError) { setFormError(requestError.message); }
+    finally { finishRequest(setResetting); }
+  }
+  if (loading && !data) return <PageState loading title="Users and roles" />;
+  if (error && !data) return <PageState title="Users and roles unavailable" message={error} onRetry={load} />;
+  return <>
+    <section className="page-title-row"><div><p className="kicker">Access control</p><h2>Users & roles</h2><p>Find staff accounts, review their access and keep sign-in secure.</p></div><Button icon={Plus} disabled={!assignableRoles.length} onClick={() => { setFormError(''); setOpen(true); }}>Add user</Button></section>
+    <section className="panel records-panel" aria-labelledby="staff-accounts-title">
+      <div className="panel-heading"><div><p className="kicker">Staff directory</p><h3 id="staff-accounts-title">Staff accounts</h3></div><StatusBadge>{users.length} users</StatusBadge></div>
+      <div className="users-summary"><span><strong>{users.filter(user => user.active).length}</strong> active</span><span><strong>{users.filter(user => user.active && user.must_change_password).length}</strong> password changes pending</span><span><strong>{data?.activeAdminCount ?? 0}</strong> active {data?.activeAdminCount === 1 ? 'administrator' : 'administrators'}</span></div>
+      {error && <div className="users-load-error" role="alert"><span>Accounts could not refresh: {error}</span><Button variant="secondary" icon={RefreshCw} onClick={load}>Try again</Button></div>}
+      <div className="records-toolbar users-toolbar">
+        <label className="search-control"><Search size={18} aria-hidden="true" /><span className="sr-only">Search staff by name or email</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search name or email…" /></label>
+        <label className="filter-control"><span>Role</span><select value={roleFilter} onChange={event => setRoleFilter(event.target.value)}>{[{ id: 'all', label: 'All roles' }, ...roles].map(role => <option key={role.id} value={role.id}>{role.label}</option>)}</select><ChevronDown size={15} aria-hidden="true" /></label>
+        <label className="filter-control"><span>Status</span><select value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="active">Active · ready</option><option value="pending">Password change pending</option><option value="inactive">Inactive</option></select><ChevronDown size={15} aria-hidden="true" /></label>
+        {(query || roleFilter !== 'all' || statusFilter !== 'all') && <button type="button" className="text-link users-clear" onClick={clearFilters}>Clear filters</button>}
+      </div>
+      <div className="users-result-count" role="status">{loading ? 'Refreshing staff accounts…' : `${filteredUsers.length} of ${users.length} accounts`}</div>
+      <div className="table-scroll"><table className="data-table users-table"><caption className="sr-only">Staff accounts, assigned access and sign-in status</caption><thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">Access summary</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{filteredUsers.map(user => {
+        const capabilities = user.capabilities || {};
+        const mayEdit = capabilities.editDetails || capabilities.changeRole || capabilities.changeStatus;
+        return <tr key={user.id}>
+          <td className="users-identity-cell"><div className="member-cell"><span className="avatar avatar--small">{initials(user.name)}</span><span><strong>{user.name}{Number(user.id) === Number(currentUser.id) && <small className="current-user-label">You</small>}</strong><small>{user.email}</small></span></div></td>
+          <td data-label="Role"><strong className="user-role-label">{ROLE_LABELS[user.role] || user.role}</strong></td>
+          <td data-label="Access" className="users-access-cell">{user.access_summary}{user.protection_reason && <small className="account-protection"><LockKeyhole size={12} aria-hidden="true" />{user.protection_reason}</small>}</td>
+          <td data-label="Status">{!user.active ? <StatusBadge>Inactive</StatusBadge> : user.must_change_password ? <StatusBadge tone="warning">Password change pending</StatusBadge> : <StatusBadge tone="success">Active</StatusBadge>}</td>
+          <td className="table-action-cell" data-label="Actions"><div className="user-row-actions">
+            <button className="icon-action" type="button" onClick={() => { setFormError(''); setEditingUser({ ...user, active: Boolean(user.active) }); }} disabled={!mayEdit || loading} title={mayEdit ? `Edit ${user.name}` : user.protection_reason || 'This account cannot be edited with your role'} aria-label={`Edit ${user.name}`}><Pencil size={16} /></button>
+            {currentUser.role === 'admin' && <><button className="icon-action" type="button" onClick={() => { setFormError(''); setResetPassword(''); setResetUser(user); }} disabled={!capabilities.resetPassword || loading} title={capabilities.resetPassword ? `Reset password for ${user.name}` : Number(user.id) === Number(currentUser.id) ? 'Change your own password in your profile' : 'Activate this account before resetting its password'} aria-label={`Reset password for ${user.name}`}><KeyRound size={16} /></button><button className="icon-action icon-action--danger" type="button" onClick={() => { setFormError(''); setPendingDelete(user); setDeleteConfirmation(''); }} disabled={!capabilities.delete || loading} title={capabilities.delete ? `Delete ${user.name}` : user.protection_reason || 'This account is protected'} aria-label={`Delete ${user.name}`}><Trash2 size={16} /></button></>}
+          </div></td>
+        </tr>;
+      })}</tbody></table></div>
+      {!filteredUsers.length && <EmptyState icon={Search} title={users.length ? 'No matching staff accounts' : 'No staff accounts'}>{users.length ? 'Try another name, email, role or status.' : 'Add a staff user to provide access to the workspace.'}{users.length > 0 && <button type="button" className="text-link users-clear" onClick={clearFilters}>Clear all filters</button>}</EmptyState>}
+    </section>
+    <details className="role-guide"><summary><ShieldCheck size={18} aria-hidden="true" /><span>Role permissions reference</span><small>{roles.length} roles</small></summary><p>Permissions are defined by the server. Choose the narrowest role that supports the staff member’s duties. Your own role and sign-in status are protected.</p><section className="role-grid">{roles.map(role => <RolePreview key={role.id} role={role} />)}</section></details>
+    {open && <ModalFrame labelledBy="add-user-title" onClose={closeDialog} busy={creating}><form className="modal-card user-edit-dialog" onSubmit={add}><header><div><p className="kicker">New account</p><h2 id="add-user-title">Add staff user</h2><p>The user must replace the temporary password at first sign-in.</p></div><button type="button" onClick={closeDialog} disabled={creating} aria-label="Close"><X /></button></header><FormError message={formError} /><fieldset className="form-fields" disabled={creating}><div className="form-grid"><Field label="Full name" required><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} autoComplete="off" maxLength="160" required /></Field><Field label="Email" required><input type="email" value={form.email} onChange={event => setForm({ ...form, email: event.target.value })} autoComplete="off" spellCheck="false" maxLength="254" required /></Field></div><Field label="Role"><select value={form.role} onChange={event => setForm({ ...form, role: event.target.value })}>{assignableRoles.map(role => <option key={role.id} value={role.id}>{role.label}</option>)}</select></Field><RolePreview role={roles.find(role => role.id === form.role)} /><Field label="Temporary password" required hint="At least 12 characters. Share it with this staff member through a secure channel."><input type="password" minLength="12" maxLength="200" value={form.password} onChange={event => setForm({ ...form, password: event.target.value })} autoComplete="new-password" required /></Field></fieldset><footer><Button type="button" variant="secondary" onClick={closeDialog} disabled={creating}>Cancel</Button><Button type="submit" disabled={creating || !assignableRoles.some(role => role.id === form.role)}>{creating ? 'Creating user…' : 'Create user'}</Button></footer></form></ModalFrame>}
+    {editingUser && <ModalFrame labelledBy="edit-user-title" onClose={closeDialog} busy={savingUser}><form className="modal-card user-edit-dialog" onSubmit={saveUser}><header><div><p className="kicker">Account details</p><h2 id="edit-user-title">Edit staff user</h2><p>Review the role’s access before saving.</p></div><button type="button" onClick={closeDialog} disabled={savingUser} aria-label="Close"><X /></button></header><FormError message={formError} /><fieldset className="form-fields" disabled={savingUser}><div className="user-edit-identity"><span className="avatar">{initials(editingUser.name)}</span><span><strong>{editingUser.name || 'Staff account'}</strong><small>{editingUser.email || 'No email entered'}</small></span></div>{editingUser.protection_reason && <p className="account-protection account-protection--notice"><LockKeyhole size={15} aria-hidden="true" />{editingUser.protection_reason}</p>}<div className="form-grid"><Field label="Full name" required hint={!editingUser.capabilities?.editDetails ? 'Only administrators can change identity details.' : ''}><input value={editingUser.name} onChange={event => setEditingUser({ ...editingUser, name: event.target.value })} disabled={!editingUser.capabilities?.editDetails} maxLength="160" required /></Field><Field label="Email address" required><input type="email" value={editingUser.email} onChange={event => setEditingUser({ ...editingUser, email: event.target.value })} disabled={!editingUser.capabilities?.editDetails} maxLength="254" spellCheck="false" required /></Field></div><Field label="Role"><select value={editingUser.role} onChange={event => setEditingUser({ ...editingUser, role: event.target.value })} disabled={!editingUser.capabilities?.changeRole}>{roles.filter(role => role.assignable || role.id === editingUser.role).map(role => <option key={role.id} value={role.id}>{role.label}</option>)}</select></Field><RolePreview role={roles.find(role => role.id === editingUser.role)} />{currentUser.role === 'admin' && <label className="account-status-control"><input type="checkbox" checked={editingUser.active} disabled={!editingUser.capabilities?.changeStatus} onChange={event => setEditingUser({ ...editingUser, active: event.target.checked })} /><span><strong>Account active</strong><small>{editingUser.capabilities?.changeStatus ? 'Deactivation prevents sign-in and ends current sessions.' : 'This account’s sign-in status is protected.'}</small></span><StatusBadge tone={editingUser.active ? 'success' : 'neutral'}>{editingUser.active ? 'Active' : 'Inactive'}</StatusBadge></label>}</fieldset><p className="dialog-help">Role changes end this staff member’s current sessions.</p><footer><Button type="button" variant="secondary" onClick={closeDialog} disabled={savingUser}>Cancel</Button><Button type="submit" icon={Pencil} disabled={savingUser}>{savingUser ? 'Saving changes…' : 'Save user changes'}</Button></footer></form></ModalFrame>}
+    {resetUser && <ModalFrame labelledBy="reset-user-title" onClose={closeDialog} busy={resetting}><form className="modal-card" onSubmit={resetUserPassword}><header><div><p className="kicker">Account recovery</p><h2 id="reset-user-title">Reset staff password</h2></div><button type="button" onClick={closeDialog} disabled={resetting} aria-label="Close"><X /></button></header><FormError message={formError} /><div className="user-edit-identity"><span className="avatar">{initials(resetUser.name)}</span><span><strong>{resetUser.name}</strong><small>{resetUser.email}</small></span></div><p className="dialog-help">This ends all of their current sessions. They must choose a new password at their next sign-in.</p><Field label="New temporary password" required hint="At least 12 characters. Share it with this staff member through a secure channel."><input type="password" minLength="12" maxLength="200" value={resetPassword} onChange={event => setResetPassword(event.target.value)} autoComplete="new-password" disabled={resetting} required /></Field><footer><Button type="button" variant="secondary" onClick={closeDialog} disabled={resetting}>Cancel</Button><Button type="submit" icon={KeyRound} disabled={resetting}>{resetting ? 'Resetting password…' : 'Reset password'}</Button></footer></form></ModalFrame>}
+    {pendingDelete && <ModalFrame labelledBy="delete-user-title" onClose={closeDialog} busy={deleting}><form className="modal-card destructive-dialog" onSubmit={deleteUser}><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent access removal</p><h2 id="delete-user-title">Delete this staff account?</h2></div><button type="button" onClick={closeDialog} disabled={deleting} aria-label="Close"><X /></button></header><FormError message={formError} /><p>This immediately signs the user out and removes their staff access. Attendance and audit history remain available. To pause access instead, cancel and deactivate the account in its editor.</p><div className="destructive-dialog__identity"><span className="avatar avatar--small">{initials(pendingDelete.name)}</span><span><strong>{pendingDelete.name}</strong><small>{pendingDelete.email} · {ROLE_LABELS[pendingDelete.role]}</small></span></div><Field label={<>Type <strong>{pendingDelete.email}</strong> to confirm</>}><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" spellCheck="false" disabled={deleting} required /></Field><footer><Button type="button" variant="secondary" onClick={closeDialog} disabled={deleting}>Cancel</Button><Button type="submit" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== pendingDelete.email.toLowerCase()}>{deleting ? 'Deleting…' : 'Delete user'}</Button></footer></form></ModalFrame>}
   </>;
 }
 
 function roleSummary(role) {
-  return ({ admin: 'Full administration, office settings, carding, finance, HR, users and all records.', chair: 'Organization oversight, records, carding, finance, HR, printing and user access.', secretary: 'Search member records and prepare forms without editing registry data.', hr: 'Staff profiles, part-time assignments and attendance KPI without member editing.', card_printing: 'Search, update photos, print member forms and maintain the daily carding ledger.', data_management: 'Import, search, create, correct and export member records.', finance: 'Record payments, daily carding, expenses, methods and finance summaries.' })[role];
+  return ({ admin: 'Full administration, office settings, carding, finance, HR, users and all records.', chair: 'Organization oversight, records, carding, finance, HR, printing and user access.', secretary: 'Search member records and prepare forms without editing registry data.', hr: 'Staff profiles, part-time assignments and attendance KPI without member editing.', card_printing: 'Search and edit member records and photos, print forms, and maintain the daily carding ledger.', data_management: 'Import, search, create, correct and export member records, print forms, and review audit activity.', finance: 'Record payments, daily carding, expenses, methods and finance summaries.' })[role];
 }
 
 function AuditPage({ showToast }) {
@@ -1088,7 +1293,7 @@ function AuditPage({ showToast }) {
 
 function DataCarePage() {
   const items = [
-    { icon: LockKeyhole, title: 'Least-privilege access', text: 'Only Chair, Card Printing and Data Management staff can edit member records.' },
+    { icon: LockKeyhole, title: 'Least-privilege access', text: 'Member access follows the permissions assigned to each role. Review your profile for your exact access.' },
     { icon: FileText, title: 'Consent & purpose', text: 'Keep a consent record and document why each field is needed for member services.' },
     { icon: Archive, title: 'Retention review', text: 'Review inactive records on a defined schedule. Do not keep sensitive data indefinitely.' },
     { icon: Download, title: 'Encrypted backups', text: 'Use PostgreSQL point-in-time backups and protect member uploads with the same tested recovery plan.' },
@@ -1111,13 +1316,35 @@ export default function App() {
   }, []);
   useEffect(() => { api('/api/auth/session').then(setSession).catch(() => setSession(null)); }, []);
   useEffect(() => {
+    const expireSession = () => {
+      setSession(null);
+      navigate('/login', { replace: true });
+      showToast('Your session ended. Sign in again to continue.', 'error');
+    };
+    const requirePasswordChange = () => {
+      setSession(current => current ? { ...current, must_change_password: true } : current);
+      navigate('/change-password', { replace: true });
+    };
+    window.addEventListener('mro:session-expired', expireSession);
+    window.addEventListener('mro:password-change-required', requirePasswordChange);
+    return () => {
+      window.removeEventListener('mro:session-expired', expireSession);
+      window.removeEventListener('mro:password-change-required', requirePasswordChange);
+    };
+  }, [navigate, showToast]);
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem('mro-theme', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#08090a' : '#ffffff');
   }, [theme]);
   useEffect(() => () => window.clearTimeout(toastTimer.current), []);
-  async function logout() { try { await api('/api/auth/logout', { method: 'POST' }); } finally { setSession(null); navigate('/login', { replace: true }); } }
+  async function logout() {
+    try {
+      await api('/api/auth/logout', { method: 'POST' });
+      setSession(null); navigate('/login', { replace: true });
+    } catch (error) { showToast(error.message || 'Unable to sign out. Please try again.', 'error'); }
+  }
   if (session === undefined) return <ThemeContext.Provider value={{ theme, setTheme }}><div className="app-loading"><img src="/assets/mro-logo.png" alt="MRO" /><RefreshCw className="spin" /></div></ThemeContext.Provider>;
   return <ThemeContext.Provider value={{ theme, setTheme }}>
     <Routes>
@@ -1134,7 +1361,7 @@ export default function App() {
         <Route path="carding" element={can(session, 'carding:view') ? <CardingPage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="finance" element={can(session, 'finance:view') ? <FinancePage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="hr" element={can(session, 'hr:view') ? <HrPage showToast={showToast} /> : <Navigate to="/app" replace />} />
-        <Route path="attendance" element={<AttendancePage showToast={showToast} />} />
+        <Route path="attendance" element={<AttendancePage user={session} showToast={showToast} />} />
         <Route path="users" element={can(session, 'users:manage') ? <UsersPage currentUser={session} showToast={showToast} onCurrentUserUpdated={setSession} /> : <Navigate to="/app" replace />} />
         <Route path="audit" element={can(session, 'audit:view') ? <AuditPage showToast={showToast} /> : <Navigate to="/app" replace />} />
         <Route path="data-care" element={can(session, 'members:view') ? <DataCarePage /> : <Navigate to="/app" replace />} />

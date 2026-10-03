@@ -1,6 +1,6 @@
 // Adapted from the open-source React Bits Threads component:
 // https://reactbits.dev/backgrounds/threads
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Renderer, Program, Mesh, Triangle, Color } from 'ogl';
 import './Threads.css';
 
@@ -71,68 +71,124 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }
 `;
 
-export default function Threads({ color = [0, 0.43, 0.72], amplitude = 0.7, distance = 0.16, enableMouseInteraction = true }) {
+export default function Threads({ color = [1, 1, 1], amplitude = 1, distance = 0, enableMouseInteraction = false, ...rest }) {
   const containerRef = useRef(null);
-  const [red = 0, green = 0.43, blue = 0.72] = color;
+  const animationFrameId = useRef(0);
+  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const propsRef = useRef({ color, amplitude, distance, enableMouseInteraction });
+  propsRef.current = { color, amplitude, distance, enableMouseInteraction };
+
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = () => setReducedMotion(preference.matches);
+    preference.addEventListener('change', updatePreference);
+    return () => preference.removeEventListener('change', updatePreference);
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return undefined;
-    const renderer = new Renderer({ alpha: true, dpr: Math.min(window.devicePixelRatio || 1, 1.5) });
+    if (!container || reducedMotion) return;
+    let renderer;
+    try { renderer = new Renderer({ alpha: true }); }
+    catch { return; } // Decorative graphics must not prevent access on devices without WebGL.
     const gl = renderer.gl;
     gl.clearColor(0, 0, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     container.appendChild(gl.canvas);
+    const geometry = new Triangle(gl);
     const program = new Program(gl, {
       vertex: vertexShader,
       fragment: fragmentShader,
       uniforms: {
         iTime: { value: 0 },
-        iResolution: { value: new Color(1, 1, 1) },
-        uColor: { value: new Color(red, green, blue) },
-        uAmplitude: { value: amplitude },
-        uDistance: { value: distance },
+        iResolution: {
+          value: new Color(gl.canvas.width, gl.canvas.height, gl.canvas.width / gl.canvas.height)
+        },
+        uColor: { value: new Color(...propsRef.current.color) },
+        uAmplitude: { value: propsRef.current.amplitude },
+        uDistance: { value: propsRef.current.distance },
         uMouse: { value: new Float32Array([0.5, 0.5]) }
       }
     });
-    const mesh = new Mesh(gl, { geometry: new Triangle(gl), program });
-    const resize = () => {
-      renderer.setSize(container.clientWidth, container.clientHeight);
-      program.uniforms.iResolution.value.set(gl.canvas.width, gl.canvas.height, gl.canvas.width / gl.canvas.height);
-    };
-    const observer = new ResizeObserver(resize);
-    observer.observe(container);
+    const mesh = new Mesh(gl, { geometry, program });
+
+    const MAX_RENDER_DIM = 1920;
+    function resize() {
+      const { clientWidth, clientHeight } = container;
+      if (!clientWidth || !clientHeight) return;
+      const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
+      const longestSide = Math.max(clientWidth, clientHeight) * baseDpr;
+      const dpr = longestSide > MAX_RENDER_DIM ? (baseDpr * MAX_RENDER_DIM) / longestSide : baseDpr;
+      renderer.dpr = dpr;
+      renderer.setSize(clientWidth, clientHeight);
+      program.uniforms.iResolution.value.r = gl.canvas.width;
+      program.uniforms.iResolution.value.g = gl.canvas.height;
+      program.uniforms.iResolution.value.b = gl.canvas.width / gl.canvas.height;
+    }
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(container);
+    window.addEventListener('resize', resize);
     resize();
-    let target = [0.5, 0.5];
-    const current = [0.5, 0.5];
-    const move = event => {
+
+    const currentMouse = [0.5, 0.5];
+    let targetMouse = [0.5, 0.5];
+    function handleMouseMove(event) {
       const rect = container.getBoundingClientRect();
-      target = [(event.clientX - rect.left) / rect.width, 1 - (event.clientY - rect.top) / rect.height];
-    };
-    const leave = () => { target = [0.5, 0.5]; };
-    container.addEventListener('pointermove', move);
-    container.addEventListener('pointerleave', leave);
-    let frame = 0;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const render = time => {
-      if (enableMouseInteraction) {
-        current[0] += (target[0] - current[0]) * 0.04;
-        current[1] += (target[1] - current[1]) * 0.04;
-        program.uniforms.uMouse.value.set(current);
+      if (!rect.width || !rect.height) return;
+      const x = (event.clientX - rect.left) / rect.width;
+      const y = 1 - (event.clientY - rect.top) / rect.height;
+      targetMouse = [x, y];
+    }
+    function handleMouseLeave() {
+      targetMouse = [0.5, 0.5];
+    }
+    container.addEventListener('mousemove', handleMouseMove);
+    container.addEventListener('mouseleave', handleMouseLeave);
+
+    let isVisible = true;
+    const intersectionObserver = new IntersectionObserver(
+      entries => {
+        isVisible = entries[0].isIntersecting;
+      },
+      { threshold: 0 }
+    );
+    intersectionObserver.observe(container);
+
+    function update(time) {
+      animationFrameId.current = requestAnimationFrame(update);
+      if (!isVisible || document.hidden) return;
+
+      const latest = propsRef.current;
+      program.uniforms.uColor.value.set(...latest.color);
+      program.uniforms.uAmplitude.value = latest.amplitude;
+      program.uniforms.uDistance.value = latest.distance;
+      if (latest.enableMouseInteraction) {
+        const smoothing = 0.05;
+        currentMouse[0] += smoothing * (targetMouse[0] - currentMouse[0]);
+        currentMouse[1] += smoothing * (targetMouse[1] - currentMouse[1]);
+        program.uniforms.uMouse.value[0] = currentMouse[0];
+        program.uniforms.uMouse.value[1] = currentMouse[1];
+      } else {
+        program.uniforms.uMouse.value[0] = 0.5;
+        program.uniforms.uMouse.value[1] = 0.5;
       }
-      program.uniforms.iTime.value = reduced ? 0 : time * 0.001;
+      program.uniforms.iTime.value = time * 0.001;
       renderer.render({ scene: mesh });
-      if (!reduced) frame = requestAnimationFrame(render);
-    };
-    frame = requestAnimationFrame(render);
+    }
+    animationFrameId.current = requestAnimationFrame(update);
+
     return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      container.removeEventListener('pointermove', move);
-      container.removeEventListener('pointerleave', leave);
+      if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
+      resizeObserver.disconnect();
+      intersectionObserver.disconnect();
+      window.removeEventListener('resize', resize);
+      container.removeEventListener('mousemove', handleMouseMove);
+      container.removeEventListener('mouseleave', handleMouseLeave);
       if (container.contains(gl.canvas)) container.removeChild(gl.canvas);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     };
-  }, [amplitude, red, green, blue, distance, enableMouseInteraction]);
+  }, [reducedMotion]);
 
-  return <div ref={containerRef} className="threads-container" aria-hidden="true" />;
+  return <div ref={containerRef} className="threads-container" aria-hidden="true" {...rest} />;
 }

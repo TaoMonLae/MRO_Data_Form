@@ -43,7 +43,8 @@ async function saveCredentials(client) {
         client_secret: key.client_secret,
         refresh_token: client.credentials.refresh_token,
     });
-    await fs.writeFile(TOKEN_PATH, payload);
+    await fs.writeFile(TOKEN_PATH, payload, { mode: 0o600 });
+    await fs.chmod(TOKEN_PATH, 0o600);
 }
 
 /**

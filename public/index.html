@@ -3,320 +3,327 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>Mon Refugee Organization Membership Form</title>
-  <!-- Optionally Font Inclusion -->
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f7fb">
+  <title>Membership Form | Mon Refugee Organization</title>
+  <link rel="icon" href="mro-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <main class="page-shell">
+    <header class="page-header">
+      <img class="header-logo" src="mro-logo.png" alt="Mon Refugee Organization" width="150" height="100">
+      <p class="eyebrow">Mon Refugee Organization</p>
+      <h1>Membership form</h1>
+      <p class="intro">Complete the details below. Fields marked <span aria-hidden="true">*</span><span class="sr-only">with an asterisk</span> are required.</p>
+    </header>
+
+    <form id="membership-form" action="/submit" method="post" enctype="multipart/form-data">
+      <fieldset>
+        <legend>Registration details</legend>
+
+        <div class="form-field">
+          <label for="reference">Reference number <span class="required" aria-hidden="true">*</span></label>
+          <input id="reference" type="text" name="reference" maxlength="80" autocomplete="off" required>
+        </div>
+
+        <div class="form-field">
+          <label for="unhcr_status">UNHCR registration status</label>
+          <select name="unhcr_status" id="unhcr_status" aria-controls="unhcr-details" aria-expanded="false">
+            <option value="No">Awaiting registration</option>
+            <option value="Yes">Registered</option>
+          </select>
+        </div>
+
+        <div id="unhcr-details" class="nested-fields" hidden>
+          <div class="field-grid">
+            <div class="form-field">
+              <label for="unhcr_file_number">UNHCR file number <span class="required" aria-hidden="true">*</span></label>
+              <input id="unhcr_file_number" type="text" name="unhcr_file_number" maxlength="80" autocomplete="off" disabled>
+            </div>
+            <div class="form-field">
+              <label for="individual_number">Individual number <span class="required" aria-hidden="true">*</span></label>
+              <input id="individual_number" type="text" name="individual_number" maxlength="80" autocomplete="off" disabled>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Personal details</legend>
+
+        <div class="form-field">
+          <label for="fullname">Full name <span class="required" aria-hidden="true">*</span></label>
+          <input id="fullname" type="text" name="fullname" maxlength="160" autocomplete="name" required>
+        </div>
+
+        <div class="field-grid">
+          <div class="form-field">
+            <label for="father_name">Father's name</label>
+            <input id="father_name" type="text" name="father_name" maxlength="160" autocomplete="off">
+          </div>
+          <div class="form-field">
+            <label for="mother_name">Mother's name</label>
+            <input id="mother_name" type="text" name="mother_name" maxlength="160" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="form-field">
+            <label for="email">Email <span class="required" aria-hidden="true">*</span></label>
+            <input id="email" type="email" name="email" maxlength="254" inputmode="email" autocomplete="email" spellcheck="false" required>
+          </div>
+          <div class="form-field">
+            <label for="phone">Phone number <span class="required" aria-hidden="true">*</span></label>
+            <input id="phone" type="tel" name="phone" maxlength="30" inputmode="tel" autocomplete="tel" required>
+          </div>
+        </div>
+
+        <div class="form-field">
+          <label for="phone2">Second phone number <span class="optional">Optional</span></label>
+          <input id="phone2" type="tel" name="phone2" maxlength="30" inputmode="tel" autocomplete="off">
+        </div>
+
+        <div class="field-grid">
+          <div class="form-field">
+            <label for="country">Country of origin</label>
+            <select name="country" id="country">
+              <option value="Myanmar">Myanmar</option>
+              <option value="Afghanistan">Afghanistan</option>
+              <option value="Syria">Syria</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="ethnicity">Ethnicity</label>
+            <select name="ethnicity" id="ethnicity"></select>
+          </div>
+        </div>
+
+        <div class="field-grid field-grid--three">
+          <div class="form-field">
+            <label for="religion">Religion</label>
+            <select name="religion" id="religion">
+              <option value="Buddhism">Buddhism</option>
+              <option value="Islam">Islam</option>
+              <option value="Christianity">Christianity</option>
+              <option value="Hinduism">Hinduism</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="gender">Gender</label>
+            <select name="gender" id="gender">
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="vulnerability">Vulnerability</label>
+            <select name="vulnerability" id="vulnerability">
+              <option value="N/A">N/A</option>
+              <option value="Single Parent">Single parent</option>
+              <option value="Medical Needs">Medical needs</option>
+              <option value="Unaccompanied Minor">Unaccompanied minor</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="form-field">
+            <label for="dob">Date of birth <span class="required" aria-hidden="true">*</span></label>
+            <input id="dob" type="date" name="dob" required>
+          </div>
+          <div class="form-field">
+            <label for="arrival">Date of arrival in Malaysia <span class="required" aria-hidden="true">*</span></label>
+            <input id="arrival" type="date" name="arrival" required>
+          </div>
+        </div>
+
+        <div class="form-field">
+          <label for="address_state">Address in Malaysia (state)</label>
+          <select name="address_state" id="address_state">
+            <option value="">Select a state</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label for="photo">Passport-size photo <span class="optional">Optional</span></label>
+          <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" aria-describedby="photo-help">
+          <p class="help-text" id="photo-help">JPG, PNG, or WebP. Maximum file size: 2 MB.</p>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Additional family members</legend>
+        <p class="section-description">Add family members included in this application. You can add up to 10.</p>
+
+        <div class="form-field form-field--short">
+          <label for="family_members">Number of additional family members</label>
+          <input type="number" name="family_members" id="family_members" value="0" min="0" max="10" inputmode="numeric">
+        </div>
+
+        <div id="familyMembersContainer" aria-live="polite"></div>
+      </fieldset>
+
+      <fieldset class="consent-section">
+        <legend>Consent</legend>
+        <label class="checkbox-row" for="consent">
+          <input id="consent" type="checkbox" name="consent" value="yes" required>
+          <span>I consent to the use of my data for this membership application. <span class="required" aria-hidden="true">*</span></span>
+        </label>
+      </fieldset>
+
+      <div class="form-actions">
+        <p id="form-status" class="form-status" role="status" aria-live="polite"></p>
+        <button id="submit-button" type="submit">Submit application</button>
+      </div>
+    </form>
+  </main>
+
   <script>
-    // Example country-ethnicity map
     const ethnicityMap = {
-      "Myanmar": ["Mon", "Chin", "Kachin", "Kayah", "Kayin", "Burman", "Rakhine", "Shan", "Other"],
-      "Afghanistan": ["Pashtun", "Tajik", "Hazara", "Uzbek", "Turkmen", "Baloch", "Nuristani", "Other"],
-      "Syria": ["Arab", "Kurd", "Turkmen", "Assyrian", "Armenian", "Other"],
-      "Other": ["N/A"]
+      Myanmar: ["Mon", "Chin", "Kachin", "Kayah", "Kayin", "Burman", "Rakhine", "Shan", "Other"],
+      Afghanistan: ["Pashtun", "Tajik", "Hazara", "Uzbek", "Turkmen", "Baloch", "Nuristani", "Other"],
+      Syria: ["Arab", "Kurd", "Turkmen", "Assyrian", "Armenian", "Other"],
+      Other: ["N/A"]
     };
 
-    // Malaysian states for the "Address in Malaysia" dropdown
     const malaysiaStates = [
       "Johor", "Kedah", "Kelantan", "Malacca", "Negeri Sembilan", "Pahang",
       "Penang", "Perak", "Perlis", "Sabah", "Sarawak", "Selangor", "Terengganu",
-      "W.P Kuala Lumpur", "Labuan", "Putrajaya"
+      "W.P. Kuala Lumpur", "Labuan", "Putrajaya"
     ];
 
-    function toggleUNHCRDetails() {
-      const status = document.getElementById("unhcr_status").value;
-      const detailsDiv = document.getElementById("unhcr-details");
-      detailsDiv.style.display = (status === "Yes") ? "block" : "none";
+    const familyDrafts = new Map();
+
+    function setOptions(select, values) {
+      const previousValue = select.value;
+      select.replaceChildren(...values.map(value => new Option(value, value)));
+      if (values.includes(previousValue)) select.value = previousValue;
     }
 
-    function updateEthnicity() {
-      const countrySelect = document.getElementById("country");
-      const ethnicitySelect = document.getElementById("ethnicity");
-      const selectedCountry = countrySelect.value;
-      ethnicitySelect.innerHTML = ""; // Clear old options
-      const options = ethnicityMap[selectedCountry] || ["N/A"];
-      options.forEach(opt => {
-        const optionEl = document.createElement("option");
-        optionEl.value = opt;
-        optionEl.text = opt;
-        ethnicitySelect.appendChild(optionEl);
+    function toggleUNHCRDetails() {
+      const status = document.getElementById("unhcr_status");
+      const details = document.getElementById("unhcr-details");
+      const shouldShow = status.value === "Yes";
+      details.hidden = !shouldShow;
+      status.setAttribute("aria-expanded", String(shouldShow));
+
+      details.querySelectorAll("input").forEach(input => {
+        input.disabled = !shouldShow;
+        input.required = shouldShow;
       });
+    }
+
+    function updateEthnicity(countrySelect, ethnicitySelect) {
+      setOptions(ethnicitySelect, ethnicityMap[countrySelect.value] || ["N/A"]);
     }
 
     function populateMalaysiaStates() {
       const addressSelect = document.getElementById("address_state");
-      malaysiaStates.forEach(st => {
-        const optionEl = document.createElement("option");
-        optionEl.value = st;
-        optionEl.text = st;
-        addressSelect.appendChild(optionEl);
+      malaysiaStates.forEach(state => addressSelect.add(new Option(state, state)));
+    }
+
+    function saveFamilyDrafts() {
+      document.querySelectorAll(".family-member-block").forEach(block => {
+        block.querySelectorAll("input, select").forEach(control => familyDrafts.set(control.name, control.value));
       });
     }
 
-    // Generate repeated fields for additional family members
+    function familyMemberMarkup(index) {
+      const stateOptions = malaysiaStates.map(state => `<option value="${state}">${state}</option>`).join("");
+      return `
+        <section class="family-member-block" aria-labelledby="family-heading-${index}">
+          <h2 id="family-heading-${index}">Family member ${index}</h2>
+          <div class="form-field">
+            <label for="fam_${index}_fullname">Full name <span class="required" aria-hidden="true">*</span></label>
+            <input id="fam_${index}_fullname" type="text" name="fam_${index}_fullname" maxlength="160" required>
+          </div>
+          <div class="field-grid">
+            <div class="form-field"><label for="fam_${index}_father_name">Father's name</label><input id="fam_${index}_father_name" type="text" name="fam_${index}_father_name" maxlength="160"></div>
+            <div class="form-field"><label for="fam_${index}_mother_name">Mother's name</label><input id="fam_${index}_mother_name" type="text" name="fam_${index}_mother_name" maxlength="160"></div>
+          </div>
+          <div class="field-grid">
+            <div class="form-field"><label for="fam_${index}_email">Email</label><input id="fam_${index}_email" type="email" name="fam_${index}_email" maxlength="254" inputmode="email" spellcheck="false"></div>
+            <div class="form-field"><label for="fam_${index}_phone">Phone number</label><input id="fam_${index}_phone" type="tel" name="fam_${index}_phone" maxlength="30" inputmode="tel"></div>
+          </div>
+          <div class="form-field"><label for="fam_${index}_phone2">Second phone number <span class="optional">Optional</span></label><input id="fam_${index}_phone2" type="tel" name="fam_${index}_phone2" maxlength="30" inputmode="tel"></div>
+          <div class="field-grid field-grid--three">
+            <div class="form-field"><label for="fam_${index}_country">Country of origin</label><select id="fam_${index}_country" name="fam_${index}_country"><option value="Myanmar">Myanmar</option><option value="Afghanistan">Afghanistan</option><option value="Syria">Syria</option><option value="Other">Other</option></select></div>
+            <div class="form-field"><label for="fam_${index}_ethnicity">Ethnicity</label><select id="fam_${index}_ethnicity" name="fam_${index}_ethnicity"></select></div>
+            <div class="form-field"><label for="fam_${index}_religion">Religion</label><select id="fam_${index}_religion" name="fam_${index}_religion"><option value="Buddhism">Buddhism</option><option value="Islam">Islam</option><option value="Christianity">Christianity</option><option value="Hinduism">Hinduism</option><option value="Other">Other</option></select></div>
+          </div>
+          <div class="field-grid field-grid--three">
+            <div class="form-field"><label for="fam_${index}_gender">Gender</label><select id="fam_${index}_gender" name="fam_${index}_gender"><option value="Male">Male</option><option value="Female">Female</option><option value="Other">Other</option></select></div>
+            <div class="form-field"><label for="fam_${index}_dob">Date of birth</label><input id="fam_${index}_dob" type="date" name="fam_${index}_dob"></div>
+            <div class="form-field"><label for="fam_${index}_arrival">Date of arrival</label><input id="fam_${index}_arrival" type="date" name="fam_${index}_arrival"></div>
+          </div>
+          <div class="field-grid">
+            <div class="form-field"><label for="fam_${index}_address_state">Address in Malaysia (state)</label><select id="fam_${index}_address_state" name="fam_${index}_address_state"><option value="">Select a state</option>${stateOptions}</select></div>
+            <div class="form-field"><label for="fam_${index}_vulnerability">Vulnerability</label><select id="fam_${index}_vulnerability" name="fam_${index}_vulnerability"><option value="N/A">N/A</option><option value="Single Parent">Single parent</option><option value="Medical Needs">Medical needs</option><option value="Unaccompanied Minor">Unaccompanied minor</option><option value="Other">Other</option></select></div>
+          </div>
+        </section>`;
+    }
+
+    function setMaximumDates() {
+      const now = new Date();
+      const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      document.querySelectorAll('input[type="date"]').forEach(input => input.max = today);
+    }
+
     function generateFamilyMembersFields() {
+      saveFamilyDrafts();
       const container = document.getElementById("familyMembersContainer");
-      container.innerHTML = ""; // Clear previous fields
-      const num = parseInt(document.getElementById("family_members").value, 10);
-      if (num > 0) {
-        for (let i = 1; i <= num; i++) {
-          const wrapper = document.createElement("div");
-          wrapper.className = "family-member-block";
-          wrapper.innerHTML = `
-            <h4>Family Member #${i}</h4>
-            <label>Full Name:
-              <input type="text" name="fam_${i}_fullname" required>
-            </label>
-            <label>Father Name:
-              <input type="text" name="fam_${i}_father_name">
-            </label>
-            <label>Mother Name:
-              <input type="text" name="fam_${i}_mother_name">
-            </label>
-            <label>Email:
-              <input type="email" name="fam_${i}_email">
-            </label>
-            <label>Phone Number:
-              <input type="text" name="fam_${i}_phone">
-            </label>
-            <label>Second Phone Number (Optional):
-              <input type="text" name="fam_${i}_phone2">
-            </label>
-            <label>Country of Origin:
-              <select name="fam_${i}_country" id="fam_${i}_country">
-                <option value="Myanmar">Myanmar</option>
-                <option value="Afghanistan">Afghanistan</option>
-                <option value="Syria">Syria</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-            <label>Ethnicity:
-              <select name="fam_${i}_ethnicity" id="fam_${i}_ethnicity">
-                <option value="Mon">Mon</option>
-                <option value="Chin">Chin</option>
-                <option value="Kachin">Kachin</option>
-                <option value="Kayah">Kayah</option>
-                <option value="Kayin">Kayin</option>
-                <option value="Burman">Burman</option>
-                <option value="Rakhine">Rakhine</option>
-                <option value="Shan">Shan</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-            <label>Religion:
-              <select name="fam_${i}_religion">
-                <option value="Buddhism">Buddhism</option>
-                <option value="Islam">Islam</option>
-                <option value="Christianity">Christianity</option>
-                <option value="Hinduism">Hinduism</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-            <label>Gender:
-              <select name="fam_${i}_gender">
-                <option value="Male">Male</option>
-                <option value="Female">Female</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-            <label>Date of Birth:
-              <input type="date" name="fam_${i}_dob">
-            </label>
-            <label>Date of Arrival in Malaysia:
-              <input type="date" name="fam_${i}_arrival">
-            </label>
-            <label>Address in Malaysia (State):
-              <select name="fam_${i}_address_state">
-                <option value="">Select State</option>
-                ${malaysiaStates.map(st => `<option value="${st}">${st}</option>`).join("")}
-              </select>
-            </label>
-            <label>Vulnerability:
-              <select name="fam_${i}_vulnerability">
-                <option value="N/A">N/A</option>
-                <option value="Single Parent">Single Parent</option>
-                <option value="Medical Needs">Medical Needs</option>
-                <option value="Unaccompanied Minor">Unaccompanied Minor</option>
-                <option value="Other">Other</option>
-              </select>
-            </label>
-          `;
-          container.appendChild(wrapper);
-          // Dynamic ethnicity for each family member
-          const famCountrySelect = wrapper.querySelector(`#fam_${i}_country`);
-          const famEthnicitySelect = wrapper.querySelector(`#fam_${i}_ethnicity`);
-          famCountrySelect.addEventListener("change", function () {
-            famEthnicitySelect.innerHTML = "";
-            const selectedCountry = famCountrySelect.value;
-            const options = ethnicityMap[selectedCountry] || ["N/A"];
-            options.forEach(opt => {
-              const optionEl = document.createElement("option");
-              optionEl.value = opt;
-              optionEl.text = opt;
-              famEthnicitySelect.appendChild(optionEl);
-            });
-          });
-        }
+      const countInput = document.getElementById("family_members");
+      const count = Math.min(10, Math.max(0, Number.parseInt(countInput.value, 10) || 0));
+      countInput.value = String(count);
+      container.innerHTML = Array.from({ length: count }, (_, index) => familyMemberMarkup(index + 1)).join("");
+
+      for (let index = 1; index <= count; index += 1) {
+        const country = document.getElementById(`fam_${index}_country`);
+        const ethnicity = document.getElementById(`fam_${index}_ethnicity`);
+        if (familyDrafts.has(country.name)) country.value = familyDrafts.get(country.name);
+        updateEthnicity(country, ethnicity);
+        country.addEventListener("change", () => updateEthnicity(country, ethnicity));
       }
+
+      container.querySelectorAll("input, select").forEach(control => {
+        if (familyDrafts.has(control.name)) control.value = familyDrafts.get(control.name);
+      });
+      setMaximumDates();
     }
 
     function initForm() {
+      const form = document.getElementById("membership-form");
+      const country = document.getElementById("country");
+      const ethnicity = document.getElementById("ethnicity");
+
       document.getElementById("unhcr_status").addEventListener("change", toggleUNHCRDetails);
+      country.addEventListener("change", () => updateEthnicity(country, ethnicity));
+      document.getElementById("family_members").addEventListener("input", generateFamilyMembersFields);
+      document.getElementById("familyMembersContainer").addEventListener("input", saveFamilyDrafts);
+      document.getElementById("familyMembersContainer").addEventListener("change", saveFamilyDrafts);
+
+      form.addEventListener("submit", () => {
+        const button = document.getElementById("submit-button");
+        button.disabled = true;
+        button.textContent = "Preparing application…";
+        document.getElementById("form-status").textContent = "Please wait while we create your membership PDF.";
+      });
+
       toggleUNHCRDetails();
-      document.getElementById("country").addEventListener("change", updateEthnicity);
-      updateEthnicity();
+      updateEthnicity(country, ethnicity);
       populateMalaysiaStates();
-      document.getElementById("family_members").addEventListener("change", generateFamilyMembersFields);
       generateFamilyMembersFields();
+      setMaximumDates();
     }
+
     window.addEventListener("DOMContentLoaded", initForm);
   </script>
-</head>
-
-<body>
-  <!-- Header Logo at the top -->
-  <div class="header-logo">
-    <img src="mro-logo.png" alt="Logo">
-  </div>
-
-  <h2>Mon Refugee Organization Membership Form</h2>
-  <form action="/submit" method="post" enctype="multipart/form-data">
-    <!-- 1. Reference Number -->
-    <label>Reference Number:
-      <input type="text" name="reference" required>
-    </label><br>
-
-    <!-- 2. UNHCR Registration -->
-    <label>Are you registered with UNHCR?
-      <select name="unhcr_status" id="unhcr_status">
-        <option value="No">Awaiting for registration</option>
-        <option value="Yes">Yes</option>
-      </select>
-    </label><br>
-    <div id="unhcr-details" style="display: none;">
-      <label>What is your UNHCR file number?
-        <input type="text" name="unhcr_file_number">
-      </label><br>
-      <label>What is your individual number?
-        <input type="text" name="individual_number">
-      </label><br>
-    </div>
-
-    <!-- 3. Full Name -->
-    <label>Full Name:
-      <input type="text" name="fullname" required>
-    </label><br>
-
-    <!-- 4. Father Name -->
-    <label>Father Name:
-      <input type="text" name="father_name">
-    </label><br>
-
-    <!-- 5. Mother Name -->
-    <label>Mother Name:
-      <input type="text" name="mother_name">
-    </label><br>
-
-    <!-- 6. Email -->
-    <label>Email:
-      <input type="email" name="email" required>
-    </label><br>
-
-    <!-- 7. Phone Number -->
-    <label>Phone Number:
-      <input type="text" name="phone" required>
-    </label><br>
-
-    <!-- 8. Second Phone Number (Optional) -->
-    <label>Second Phone Number (Optional):
-      <input type="text" name="phone2">
-    </label><br>
-
-    <!-- 9. Country of Origin -->
-    <label>Country of Origin:
-      <select name="country" id="country">
-        <option value="Myanmar">Myanmar</option>
-        <option value="Afghanistan">Afghanistan</option>
-        <option value="Syria">Syria</option>
-        <option value="Other">Other</option>
-      </select>
-    </label><br>
-
-    <!-- 10. Ethnicity (based on country) -->
-    <label>Ethnicity:
-      <select name="ethnicity" id="ethnicity">
-        <!-- Populated via JS -->
-      </select>
-    </label><br>
-
-    <!-- 11. Religion -->
-    <label>Religion:
-      <select name="religion">
-        <option value="Buddhism">Buddhism</option>
-        <option value="Islam">Islam</option>
-        <option value="Christianity">Christianity</option>
-        <option value="Hinduism">Hinduism</option>
-        <option value="Other">Other</option>
-      </select>
-    </label><br>
-
-    <!-- 12. Gender -->
-    <label>Gender:
-      <select name="gender">
-        <option value="Male">Male</option>
-        <option value="Female">Female</option>
-        <option value="Other">Other</option>
-      </select>
-    </label><br>
-
-    <!-- 13. Date of Birth -->
-    <label>Date of Birth:
-      <input type="date" name="dob" required>
-    </label><br>
-
-    <!-- 14. Date of Arrival in Malaysia -->
-    <label>Date of Arrival in Malaysia:
-      <input type="date" name="arrival" required>
-    </label><br>
-
-    <!-- 15. Address in Malaysia (Dropdown states) -->
-    <label>Address in Malaysia (State):
-      <select name="address_state" id="address_state">
-        <option value="">Select State</option>
-        <!-- Populated in JS from malaysiaStates array -->
-      </select>
-    </label><br>
-
-    <!-- 16. Upload Passport-size Photo -->
-    <label>Upload Passport-size Photo:
-      <input type="file" name="photo" accept="image/*">
-    </label><br>
-
-    <!-- 17. Number of Additional Family Members -->
-    <label>Number of Additional Family Members:
-      <input type="number" name="family_members" id="family_members" value="0" min="0">
-    </label><br>
-    <div id="familyMembersContainer"></div>
-
-    <!-- 18. Vulnerability -->
-    <label>Vulnerability:
-      <select name="vulnerability">
-        <option value="N/A">N/A</option>
-        <option value="Single Parent">Single Parent</option>
-        <option value="Medical Needs">Medical Needs</option>
-        <option value="Unaccompanied Minor">Unaccompanied Minor</option>
-        <option value="Other">Other</option>
-      </select>
-    </label><br>
-
-    <!-- 19. Consent -->
-    <label>
-      <input type="checkbox" name="consent" value="yes" required>
-      I give my consent for data usage
-    </label><br>
-
-    <button type="submit">Submit</button>
-  </form>
 </body>
 
 </html>

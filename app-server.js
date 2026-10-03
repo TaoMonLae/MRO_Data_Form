@@ -9,8 +9,10 @@ const puppeteer = require('puppeteer');
 const ExcelJS = require('exceljs');
 const unzipper = require('unzipper');
 const morgan = require('morgan');
+const { invalid, validIsoDate, money, count: cardCount, importNetAmount } = require('./validation');
 require('dotenv').config();
 const { run, get, all, transaction, initializeDatabase, closeDatabase } = require('./database');
+const { parseCookies, hashPassword, verifyPassword, protectMutation, createRateLimiter, accountCapabilities } = require('./security');
 
 const app = express();
 const ROOT = __dirname;
@@ -20,6 +22,10 @@ const HAS_CLIENT_BUILD = fs.existsSync(path.join(ROOT, 'dist', 'index.html'));
 const SESSION_DAYS = 7;
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 const MIN_PASSWORD_LENGTH = 12;
+const SESSION_COOKIE_OPTIONS = { httpOnly: true, secure: IS_PRODUCTION, sameSite: 'lax', path: '/' };
+const loginIpLimiter = createRateLimiter({ limit: 40, windowMs: 15 * 60_000 });
+const loginAccountLimiter = createRateLimiter({ limit: 12, windowMs: 15 * 60_000 });
+const passwordChangeLimiter = createRateLimiter({ limit: 12, windowMs: 15 * 60_000 });
 
 function environmentNumber(name, fallback) {
   const value = String(process.env[name] ?? '').trim();
@@ -63,11 +69,29 @@ const importUpload = multer({ storage: multer.memoryStorage(), limits: { fileSiz
 const bulkPhotoUpload = multer({ dest: os.tmpdir(), limits: { fileSize: 500 * 1024 * 1024, files: 1 } });
 
 app.disable('x-powered-by');
-app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev'));
+if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY);
+morgan.token('safe-path', req => req.path);
+app.use(morgan(':method :safe-path :status :response-time ms'));
+app.use((req, res, next) => {
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer',
+    'Cross-Origin-Resource-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)' });
+  if (IS_PRODUCTION) {
+    res.set('Strict-Transport-Security', 'max-age=31536000');
+    res.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+  }
+  next();
+});
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); }, protectMutation);
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '200kb' }));
-app.use('/assets', express.static(path.join(ROOT, 'public'), { maxAge: IS_PRODUCTION ? '1d' : 0 }));
-app.use('/uploads', express.static(path.join(ROOT, 'public', 'uploads'), { fallthrough: false }));
+// Serve only the explicitly public brand assets; never expose public/uploads
+// through an alternate /assets path or a URL-encoded traversal.
+app.use('/assets', express.static(path.join(ROOT, 'dist', 'assets'), { maxAge: IS_PRODUCTION ? '1d' : 0, index: false, dotfiles: 'deny' }));
+app.get('/assets/:name', (req, res) => {
+  if (!['mro-logo.png', 'logo.png', 'left-logo.png', 'unLogo.png'].includes(req.params.name)) return res.sendStatus(404);
+  return res.sendFile(req.params.name, { root: path.join(ROOT, 'public'), maxAge: IS_PRODUCTION ? '1d' : 0 });
+});
+app.use('/assets', (_req, res) => res.sendStatus(404));
 
 function malaysiaDate(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kuala_Lumpur', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
@@ -98,7 +122,7 @@ function displayTime(value) {
 
 function dateOrNull(value) {
   const normalized = toIsoDate(value);
-  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : null;
+  return validIsoDate(normalized);
 }
 
 function toDisplayDate(value) {
@@ -128,30 +152,14 @@ function cleanReferenceNumber(value) {
   return String(value || '').trim().replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80);
 }
 
-function parseCookies(req) {
-  return Object.fromEntries(String(req.headers.cookie || '').split(';').map(item => item.trim()).filter(Boolean).map(item => {
-    const index = item.indexOf('=');
-    return [decodeURIComponent(item.slice(0, index)), decodeURIComponent(item.slice(index + 1))];
-  }));
-}
-
-function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
-  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
-  return `${salt}:${derived}`;
-}
-
-function verifyPassword(password, stored) {
-  const [salt, expectedHex] = String(stored || '').split(':');
-  if (!salt || !expectedHex) return false;
-  const actual = crypto.scryptSync(String(password), salt, 64);
-  const expected = Buffer.from(expectedHex, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-}
-
 function passwordPolicyError(password) {
   if (password.length < MIN_PASSWORD_LENGTH) return `Use at least ${MIN_PASSWORD_LENGTH} characters for the new password.`;
   if (password.length > 200) return 'Use a password no longer than 200 characters.';
   return '';
+}
+
+function validEmail(email) {
+  return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function userPayload(row) {
@@ -289,21 +297,26 @@ function auditPayload(row) {
 }
 
 async function seedInitialUser() {
-  const count = await get('SELECT COUNT(*)::int AS count FROM users WHERE deleted_at IS NULL');
-  if (count.count) return;
-  const email = process.env.INITIAL_ADMIN_EMAIL || (IS_PRODUCTION ? '' : 'chair@mro.local');
-  const password = process.env.INITIAL_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : 'Mro2026!');
-  const role = process.env.INITIAL_ADMIN_ROLE || 'chair';
-  if (email && password) {
+  await transaction(async ({ get: txGet, run: txRun }) => {
+    await txRun('SELECT pg_advisory_xact_lock(771462, 2)');
+    const count = await txGet('SELECT COUNT(*)::int AS count FROM users WHERE deleted_at IS NULL');
+    if (count.count) return;
+    const email = String(process.env.INITIAL_ADMIN_EMAIL || '').trim().toLowerCase();
+    const password = String(process.env.INITIAL_ADMIN_PASSWORD || '');
+    const role = process.env.INITIAL_ADMIN_ROLE || 'admin';
+    if (!email || !password) {
+      console.warn('No users exist. Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD, then restart.');
+      return;
+    }
+    if (!validEmail(email)) throw new Error('INITIAL_ADMIN_EMAIL must be a valid email address.');
+    if (!Object.prototype.hasOwnProperty.call(ROLE_LABELS, role)) throw new Error('INITIAL_ADMIN_ROLE must be a supported role.');
     const policyError = passwordPolicyError(password);
     if (policyError) throw new Error(`INITIAL_ADMIN_PASSWORD: ${policyError}`);
-    await run(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
+    await txRun(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
       VALUES (?, ?, ?, ?, TRUE, TRUE, NOW(), NOW()) RETURNING id`,
-    [process.env.INITIAL_ADMIN_NAME || 'MRO Chair Person', email.toLowerCase(), hashPassword(password), role]);
-    console.log(`Initial ${ROLE_LABELS[role]} account created for ${email}`);
-  } else {
-    console.warn('No users exist. Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD, then restart.');
-  }
+    [process.env.INITIAL_ADMIN_NAME || 'MRO Administrator', email, await hashPassword(password), role]);
+    console.log(`Initial ${ROLE_LABELS[role]} account created.`);
+  });
 }
 
 async function audit(req, action, detail, entityType = '', entityId = '') {
@@ -312,15 +325,22 @@ async function audit(req, action, detail, entityType = '', entityId = '') {
     [actor.id, actor.name, action, detail, entityType, String(entityId || ''), req.ip, new Date()]);
 }
 
+async function visibleAuditRows(user, limit) {
+  if (['admin', 'chair'].includes(user.role)) return all('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?', [limit]);
+  // Registry staff must not learn finance, HR or account details through logs.
+  return all(`SELECT id, user_id, actor_name, action, detail, entity_type, entity_id, created_at FROM audit_logs
+    WHERE entity_type IN ('member', 'import', 'photo_import', 'export') ORDER BY id DESC LIMIT ?`, [limit]);
+}
+
 async function authenticate(req, res, next) {
   try {
     const token = parseCookies(req).mro_session;
-    if (!token) return res.status(401).json({ error: 'Please sign in.' });
+    if (!token) return res.status(401).json({ error: 'Please sign in.', code: 'SESSION_REQUIRED' });
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const row = await get(`SELECT users.id, users.name, users.email, users.role, users.active, users.must_change_password
       FROM sessions JOIN users ON users.id = sessions.user_id
       WHERE sessions.token_hash = ? AND sessions.expires_at > NOW() AND users.deleted_at IS NULL`, [tokenHash]);
-    if (!row || !row.active) return res.status(401).json({ error: 'Your session has expired.' });
+    if (!row || !row.active) return res.status(401).json({ error: 'Your session has expired.', code: 'SESSION_EXPIRED' });
     req.user = userPayload(row);
     req.sessionTokenHash = tokenHash;
     next();
@@ -339,21 +359,40 @@ function requirePermission(permission) {
     : res.status(403).json({ error: 'Your role does not allow this action.' })];
 }
 
+app.use('/uploads', ...requirePermission('members:view'), (_req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  next();
+}, express.static(path.join(ROOT, 'public', 'uploads'), { fallthrough: false, dotfiles: 'deny', index: false,
+  setHeaders: res => res.setHeader('Cache-Control', 'private, no-store') }));
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || '');
+    const ipRetryAfter = loginIpLimiter.consume(req.ip);
+    if (ipRetryAfter) return res.set('Retry-After', String(ipRetryAfter)).status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
+    if (!validEmail(email) || !password || password.length > 200) return res.status(401).json({ error: 'Email or password is incorrect.' });
+    const retryAfter = loginAccountLimiter.consume(email);
+    if (retryAfter) return res.set('Retry-After', String(retryAfter)).status(429).json({ error: 'Too many sign-in attempts. Try again later.' });
     const user = await get('SELECT * FROM users WHERE LOWER(email) = ? AND active = TRUE AND deleted_at IS NULL', [email]);
-    if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: 'Email or password is incorrect.' });
+    const validPassword = await verifyPassword(password, user?.password_hash);
+    if (!user || !validPassword) return res.status(401).json({ error: 'Email or password is incorrect.' });
     const token = crypto.randomBytes(32).toString('base64url');
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    await run('DELETE FROM sessions WHERE expires_at <= NOW()');
-    await run('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
-      [tokenHash, user.id, new Date(Date.now() + SESSION_DAYS * 86400000), new Date()]);
-    res.cookie('mro_session', token, { httpOnly: true, secure: IS_PRODUCTION, sameSite: 'lax', maxAge: SESSION_DAYS * 86400000, path: '/' });
-    req.user = user;
-    await audit(req, 'Signed in', `${user.name} signed in to the staff portal.`, 'user', user.id);
-    res.json(userPayload(user));
+    const currentUser = await transaction(async tx => {
+      await tx.run('SELECT pg_advisory_xact_lock(771462, 2)');
+      const current = await tx.get('SELECT * FROM users WHERE id = ? AND active = TRUE AND deleted_at IS NULL', [user.id]);
+      if (!current || current.password_hash !== user.password_hash || current.email !== user.email) throw requestError(401, 'Email or password is incorrect.');
+      await tx.run('DELETE FROM sessions WHERE expires_at <= NOW()');
+      await tx.run('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
+        [tokenHash, current.id, new Date(Date.now() + SESSION_DAYS * 86400000), new Date()]);
+      return current;
+    });
+    loginAccountLimiter.clear(email);
+    res.cookie('mro_session', token, { ...SESSION_COOKIE_OPTIONS, maxAge: SESSION_DAYS * 86400000 });
+    req.user = currentUser;
+    await audit(req, 'Signed in', `${currentUser.name} signed in to the staff portal.`, 'user', currentUser.id);
+    res.json(userPayload(currentUser));
   } catch (error) { next(error); }
 });
 
@@ -367,21 +406,30 @@ app.get('/api/health', async (_req, res, next) => {
 app.get('/api/auth/session', authenticate, (req, res) => res.json(req.user));
 app.post('/api/auth/change-password', authenticate, async (req, res, next) => {
   try {
+    const retryAfter = passwordChangeLimiter.consume(String(req.user.id));
+    if (retryAfter) return res.set('Retry-After', String(retryAfter)).status(429).json({ error: 'Too many password attempts. Try again later.' });
     const currentPassword = String(req.body.current_password || '');
     const newPassword = String(req.body.new_password || '');
     const confirmation = String(req.body.confirm_password || '');
     const policyError = passwordPolicyError(newPassword);
-    if (!currentPassword) return res.status(400).json({ error: 'Enter your temporary or current password.' });
+    if (!currentPassword || currentPassword.length > 200) return res.status(400).json({ error: 'Enter your temporary or current password.' });
     if (policyError) return res.status(400).json({ error: policyError });
     if (newPassword !== confirmation) return res.status(400).json({ error: 'The new passwords do not match.' });
-    const account = await get('SELECT password_hash FROM users WHERE id = ? AND active = TRUE AND deleted_at IS NULL', [req.user.id]);
-    if (!account || !verifyPassword(currentPassword, account.password_hash)) return res.status(401).json({ error: 'The current password is incorrect.' });
-    if (verifyPassword(newPassword, account.password_hash)) return res.status(400).json({ error: 'Choose a password different from the temporary or current password.' });
-    await transaction(async ({ run: txRun }) => {
+    const newHash = await hashPassword(newPassword);
+    await transaction(async ({ run: txRun, get: txGet }) => {
+      await txRun('SELECT pg_advisory_xact_lock(771462, 2)');
+      const account = await txGet(`SELECT users.password_hash FROM users JOIN sessions ON sessions.user_id = users.id
+        WHERE users.id = ? AND users.active = TRUE AND users.deleted_at IS NULL AND sessions.token_hash = ? AND sessions.expires_at > NOW()`, [req.user.id, req.sessionTokenHash]);
+      if (!account) {
+        const error = requestError(401, 'Your session has expired.'); error.responseCode = 'SESSION_EXPIRED'; throw error;
+      }
+      if (!await verifyPassword(currentPassword, account.password_hash)) throw requestError(401, 'The current password is incorrect.');
+      if (await verifyPassword(newPassword, account.password_hash)) throw requestError(400, 'Choose a password different from the temporary or current password.');
       await txRun(`UPDATE users SET password_hash = ?, must_change_password = FALSE, password_changed_at = NOW(), updated_at = NOW() WHERE id = ?`,
-        [hashPassword(newPassword), req.user.id]);
+        [newHash, req.user.id]);
       await txRun('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', [req.user.id, req.sessionTokenHash]);
     });
+    passwordChangeLimiter.clear(String(req.user.id));
     req.user.must_change_password = false;
     await audit(req, 'Password changed', `${req.user.name} changed their account password.`, 'user', req.user.id);
     res.json(userPayload(req.user));
@@ -392,7 +440,7 @@ app.post('/api/auth/logout', authenticate, async (req, res, next) => {
     const token = parseCookies(req).mro_session;
     if (token) await run('DELETE FROM sessions WHERE token_hash = ?', [crypto.createHash('sha256').update(token).digest('hex')]);
     await audit(req, 'Signed out', `${req.user.name} signed out.`, 'user', req.user.id);
-    res.clearCookie('mro_session', { path: '/' });
+    res.clearCookie('mro_session', SESSION_COOKIE_OPTIONS);
     res.status(204).end();
   } catch (error) { next(error); }
 });
@@ -422,7 +470,7 @@ app.get('/api/dashboard', authenticate, requirePasswordChangeComplete, async (re
         WHEN reference_number = '' THEN 'Missing reference number' ELSE 'Incomplete data' END AS reason
       FROM submissions WHERE photo_path = '' OR reference_number = '' OR fullname = '' OR dob IS NULL OR phone = ''
       ORDER BY id DESC LIMIT 5`) : [];
-    const activity = req.user.permissions.includes('audit:view') ? await all('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 6') : [];
+    const activity = req.user.permissions.includes('audit:view') ? await visibleAuditRows(req.user, 6) : [];
     const registryTrend = mayViewMembers ? await all(`WITH months AS (
         SELECT generate_series(date_trunc('month', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur') - INTERVAL '5 months',
           date_trunc('month', NOW() AT TIME ZONE 'Asia/Kuala_Lumpur'), INTERVAL '1 month') AS month
@@ -509,20 +557,35 @@ async function storePhoto(file, reference, previousPath = '') {
   if (!clean) throw new Error('A valid MRO status number is required before uploading a photo.');
   const uploads = path.join(ROOT, 'public', 'uploads');
   fs.mkdirSync(uploads, { recursive: true });
-  const target = path.join(uploads, `${clean}${PHOTO_TYPES.get(file.mimetype)}`);
-  if (previousPath && path.resolve(previousPath) !== path.resolve(target) && fs.existsSync(previousPath)) fs.renameSync(previousPath, target);
-  else fs.renameSync(file.path, target);
+  const extension = PHOTO_TYPES.get(file.mimetype);
+  const bytes = await fs.promises.readFile(file.path);
+  if (!extension || bytes.length > MAX_PHOTO_BYTES || !validPhotoBytes(bytes, extension)) {
+    const error = new Error('The selected file is not a valid JPG or PNG photo.'); error.status = 400; throw error;
+  }
+  const target = path.join(uploads, `${clean}-${crypto.randomUUID()}${extension}`);
+  await fs.promises.writeFile(target, bytes, { flag: 'wx', mode: 0o640 });
   return target;
+}
+
+async function removeManagedPhoto(photoPath) {
+  if (!photoPath) return;
+  const uploads = path.resolve(ROOT, 'public', 'uploads');
+  const resolved = path.resolve(photoPath);
+  if (path.dirname(resolved) !== uploads) return;
+  try { await fs.promises.unlink(resolved); }
+  catch (error) { if (error.code !== 'ENOENT') console.error('Unable to remove a managed member photo:', error.code); }
 }
 
 app.post('/api/members', ...requirePermission('members:edit'), photoUpload.single('photo'), async (req, res, next) => {
   let completed = false;
+  let photoPath = '';
   try {
     const values = memberValues(req.body);
     if (!safeReference(values.reference) || !values.fullname) return res.status(400).json({ error: 'MRO status number and full name are required.' });
+    if (['dob', 'arrival'].some(field => values[field] && !dateOrNull(values[field]))) return res.status(400).json({ error: 'Enter a valid date of birth and arrival date, or leave them blank.' });
     values.reference = safeReference(values.reference);
     values.reference_number = cleanReferenceNumber(values.reference_number);
-    const photoPath = await storePhoto(req.file, values.reference);
+    photoPath = await storePhoto(req.file, values.reference);
     const now = new Date();
     const columns = [...MEMBER_FIELDS, 'photo_path', 'family_members', 'family_members_data', 'created_at', 'updated_at', 'updated_by'];
     const result = await run(`INSERT INTO submissions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')}) RETURNING id`,
@@ -533,61 +596,57 @@ app.post('/api/members', ...requirePermission('members:edit'), photoUpload.singl
   } catch (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'That MRO status number or reference number already exists.' });
     next(error);
-  } finally { if (req.file && !completed && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); }
+  } finally {
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (!completed) await removeManagedPhoto(photoPath);
+  }
 });
 
 app.put('/api/members/:id', ...requirePermission('members:edit'), photoUpload.single('photo'), async (req, res, next) => {
   let completed = false;
+  let photoPath = ''; let previousPath = '';
   try {
-    const existing = await get('SELECT * FROM submissions WHERE id = ?', [req.params.id]);
-    if (!existing) return res.status(404).json({ error: 'Member record not found.' });
     const values = memberValues(req.body);
     if (!safeReference(values.reference) || !values.fullname) return res.status(400).json({ error: 'MRO status number and full name are required.' });
+    if (['dob', 'arrival'].some(field => values[field] && !dateOrNull(values[field]))) return res.status(400).json({ error: 'Enter a valid date of birth and arrival date, or leave them blank.' });
     values.reference = safeReference(values.reference);
     values.reference_number = cleanReferenceNumber(values.reference_number);
-    const photoPath = await storePhoto(req.file, values.reference, existing.photo_path);
-    await run(`UPDATE submissions SET ${MEMBER_FIELDS.map(field => `${field} = ?`).join(', ')}, photo_path = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-      [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, new Date(), req.user.id, req.params.id]);
+    await transaction(async tx => {
+      const existing = await tx.get('SELECT * FROM submissions WHERE id = ? FOR UPDATE', [req.params.id]);
+      if (!existing) throw requestError(404, 'Member record not found.');
+      previousPath = existing.photo_path;
+      photoPath = await storePhoto(req.file, values.reference, previousPath);
+      await tx.run(`UPDATE submissions SET ${MEMBER_FIELDS.map(field => `${field} = ?`).join(', ')}, photo_path = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+        [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, new Date(), req.user.id, req.params.id]);
+    });
     completed = true;
+    if (photoPath !== previousPath) await removeManagedPhoto(previousPath);
     await audit(req, 'Member record updated', `${values.reference} · ${values.fullname}`, 'member', req.params.id);
     res.json({ id: Number(req.params.id) });
   } catch (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'That MRO status number or reference number already exists.' });
     next(error);
-  } finally { if (req.file && !completed && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); }
+  } finally {
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (!completed && photoPath !== previousPath) await removeManagedPhoto(photoPath);
+  }
 });
 
 app.delete('/api/members/:id', ...requirePermission('members:edit'), async (req, res, next) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can permanently delete member records.' });
-    const member = await get('SELECT id, reference, photo_path FROM submissions WHERE id = ?', [req.params.id]);
-    if (!member) return res.status(404).json({ error: 'Member record not found.' });
-    const confirmation = String(req.body?.confirmation || '').trim().toLowerCase();
-    if (confirmation !== String(member.reference).trim().toLowerCase()) {
-      return res.status(400).json({ error: 'Enter the member’s MRO Status number exactly to confirm deletion.' });
-    }
-    const uploadsRoot = path.resolve(ROOT, 'public', 'uploads');
-    const photoPath = member.photo_path ? path.resolve(member.photo_path) : '';
-    let removedPhoto = null;
-    if (photoPath && photoPath.startsWith(`${uploadsRoot}${path.sep}`) && fs.existsSync(photoPath)) {
-      removedPhoto = { path: photoPath, data: await fs.promises.readFile(photoPath) };
-      await fs.promises.unlink(photoPath);
-    }
-    try {
-      await transaction(async ({ run: txRun }) => {
-        const deleted = await txRun('DELETE FROM submissions WHERE id = ?', [member.id]);
-        if (!deleted.changes) { const missing = new Error('Member record not found.'); missing.status = 404; throw missing; }
-        await txRun(`INSERT INTO audit_logs (user_id, actor_name, action, detail, entity_type, entity_id, ip_address, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [req.user.id, req.user.name, 'Member record permanently deleted',
-          'A member record and its managed photo were permanently removed.', 'member', String(member.id), req.ip, new Date()]);
-      });
-    } catch (deleteError) {
-      if (removedPhoto && !fs.existsSync(removedPhoto.path)) {
-        try { await fs.promises.writeFile(removedPhoto.path, removedPhoto.data, { flag: 'wx' }); }
-        catch (restoreError) { console.error(`Member ${member.id} deletion failed and its photo could not be restored:`, restoreError); }
-      }
-      throw deleteError;
-    }
+    const photoPath = await transaction(async tx => {
+      const member = await tx.get('SELECT id, reference, photo_path FROM submissions WHERE id = ? FOR UPDATE', [req.params.id]);
+      if (!member) throw requestError(404, 'Member record not found.');
+      const confirmation = String(req.body?.confirmation || '').trim().toLowerCase();
+      if (confirmation !== String(member.reference).trim().toLowerCase()) throw requestError(400, 'Enter the member’s MRO Status number exactly to confirm deletion.');
+      await tx.run('DELETE FROM submissions WHERE id = ?', [member.id]);
+      await tx.run(`INSERT INTO audit_logs (user_id, actor_name, action, detail, entity_type, entity_id, ip_address, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [req.user.id, req.user.name, 'Member record permanently deleted',
+        'A member record and its managed photo were permanently removed.', 'member', String(member.id), req.ip, new Date()]);
+      return member.photo_path;
+    });
+    await removeManagedPhoto(photoPath);
     res.status(204).end();
   } catch (error) { next(error); }
 });
@@ -701,6 +760,16 @@ function validPhotoBytes(buffer, extension) {
   return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
 }
 
+async function boundedPhotoBuffer(stream, limit = MAX_PHOTO_BYTES) {
+  const chunks = []; let bytes = 0;
+  for await (const chunk of stream) {
+    bytes += chunk.length;
+    if (bytes > limit) throw requestError(400, 'The uncompressed photo exceeds the size limit.');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, bytes);
+}
+
 app.post('/api/members/photos/bulk', ...requirePermission('members:edit'), bulkPhotoUpload.single('file'), async (req, res, next) => {
   try {
     if (!req.file || path.extname(req.file.originalname).toLowerCase() !== '.zip') return res.status(400).json({ error: 'Choose a ZIP file containing JPG, JPEG or PNG member photos.' });
@@ -713,7 +782,7 @@ app.post('/api/members/photos/bulk', ...requirePermission('members:edit'), bulkP
     if (totalUncompressed > 2 * 1024 * 1024 * 1024) return res.status(400).json({ error: 'The uncompressed photos exceed 2 GB. Split the archive into smaller files.' });
     const uploads = path.join(ROOT, 'public', 'uploads');
     fs.mkdirSync(uploads, { recursive: true });
-    let matched = 0; let invalid = 0; let oversized = 0; const unmatched = [];
+    let matched = 0; let invalid = 0; let oversized = 0; let actualBytes = 0; const unmatched = [];
     for (const entry of entries) {
       const filename = path.posix.basename(String(entry.path).replaceAll('\\', '/'));
       const extension = path.extname(filename).toLowerCase();
@@ -723,14 +792,28 @@ app.post('/api/members/photos/bulk', ...requirePermission('members:edit'), bulkP
       if (!reference || reference !== stem || !members.has(reference)) { if (unmatched.length < 100) unmatched.push(filename); continue; }
       const size = Number(entry.uncompressedSize || entry.vars?.uncompressedSize || 0);
       if (size > MAX_PHOTO_BYTES) { oversized += 1; continue; }
-      const buffer = await entry.buffer();
+      let buffer;
+      try { buffer = await boundedPhotoBuffer(entry.stream()); }
+      catch (error) { if (error.status === 400) { oversized += 1; continue; } throw error; }
+      actualBytes += buffer.length;
+      if (actualBytes > 2 * 1024 * 1024 * 1024) throw requestError(400, 'The expanded photos exceed 2 GB. Split the archive into smaller files.');
       if (buffer.length > MAX_PHOTO_BYTES || !validPhotoBytes(buffer, extension)) { invalid += 1; continue; }
       const member = members.get(reference);
       const normalizedExtension = extension === '.jpeg' ? '.jpg' : extension;
-      const target = path.join(uploads, `${reference}${normalizedExtension}`);
-      await fs.promises.writeFile(target, buffer, { mode: 0o640 });
-      if (member.photo_path && path.resolve(member.photo_path) !== path.resolve(target) && fs.existsSync(member.photo_path)) await fs.promises.unlink(member.photo_path);
-      await run('UPDATE submissions SET photo_path = ?, updated_at = NOW(), updated_by = ? WHERE id = ?', [target, req.user.id, member.id]);
+      const target = path.join(uploads, `${reference}-${crypto.randomUUID()}${normalizedExtension}`);
+      await fs.promises.writeFile(target, buffer, { flag: 'wx', mode: 0o640 });
+      let previousPath;
+      try {
+        const result = await transaction(async tx => {
+          const current = await tx.get('SELECT reference, photo_path FROM submissions WHERE id = ? FOR UPDATE', [member.id]);
+          if (!current || current.reference !== reference) return false;
+          previousPath = current.photo_path;
+          await tx.run('UPDATE submissions SET photo_path = ?, updated_at = NOW(), updated_by = ? WHERE id = ?', [target, req.user.id, member.id]);
+          return true;
+        });
+        if (!result) { await removeManagedPhoto(target); continue; }
+      } catch (error) { await removeManagedPhoto(target); throw error; }
+      await removeManagedPhoto(previousPath);
       member.photo_path = target;
       matched += 1;
     }
@@ -812,13 +895,16 @@ function referenceFormHtml(member) {
     </main></body></html>`;
 }
 
+let activePrintJobs = 0;
 app.get('/api/members/:id/print', ...requirePermission('print:forms'), async (req, res, next) => {
+  if (activePrintJobs >= 2) return res.set('Retry-After', '5').status(429).json({ error: 'Two forms are being prepared. Please try again in a few seconds.' });
+  activePrintJobs += 1;
   let browser;
   try {
     const member = await get('SELECT * FROM submissions WHERE id = ?', [req.params.id]);
     if (!member) return res.status(404).send('Member record not found.');
     if (!member.reference_number) return res.status(409).json({ error: 'Add a Reference Number to this member before printing.' });
-    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
     await page.setContent(referenceFormHtml(member), { waitUntil: 'networkidle0' });
     const pdf = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
@@ -827,7 +913,7 @@ app.get('/api/members/:id/print', ...requirePermission('print:forms'), async (re
     res.setHeader('Content-Disposition', `inline; filename="${safeReference(member.reference_number) || safeReference(member.reference)}-new-registration-request.pdf"`);
     res.send(Buffer.from(pdf));
   } catch (error) { next(error); }
-  finally { if (browser) await browser.close(); }
+  finally { activePrintJobs -= 1; if (browser) await browser.close(); }
 });
 
 app.get('/api/settings/geofence', ...requirePermission('settings:manage'), async (_req, res, next) => {
@@ -874,9 +960,9 @@ app.get('/api/attendance', authenticate, requirePasswordChangeComplete, async (r
     const geofence = await geofenceSettings();
     const current = await get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, malaysiaDate()]);
     const history = await all('SELECT * FROM attendance WHERE user_id = ? ORDER BY work_date DESC LIMIT 30', [req.user.id]);
-    const team = await all(`SELECT users.id AS user_id, users.name, users.role, attendance.clock_in, attendance.clock_out
+    const team = req.user.permissions.includes('hr:view') ? await all(`SELECT users.id AS user_id, users.name, users.role, attendance.clock_in, attendance.clock_out
       FROM users LEFT JOIN attendance ON attendance.user_id = users.id AND attendance.work_date = ?
-      WHERE users.active = TRUE AND users.deleted_at IS NULL ORDER BY users.name`, [malaysiaDate()]);
+      WHERE users.active = TRUE AND users.deleted_at IS NULL ORDER BY users.name`, [malaysiaDate()]) : [];
     res.json({
       current: current ? { ...attendancePayload(current), status: current.clock_in && !current.clock_out ? 'clocked_in' : 'clocked_out' } : null,
       history: history.map(attendancePayload),
@@ -907,25 +993,29 @@ app.post('/api/attendance/clock', authenticate, requirePasswordChangeComplete, a
     if (action === 'in') {
       if (current?.clock_in && !current.clock_out) return res.status(409).json({ error: 'You are already clocked in.' });
       if (current?.clock_out) return res.status(409).json({ error: 'Today\'s attendance is already complete.' });
-      await run(`INSERT INTO attendance (user_id, work_date, clock_in, clock_in_latitude, clock_in_longitude,
+      const inserted = await run(`INSERT INTO attendance (user_id, work_date, clock_in, clock_in_latitude, clock_in_longitude,
         clock_in_accuracy_meters, clock_in_distance_meters, clock_in_location_captured_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, work_date) DO UPDATE SET clock_in = excluded.clock_in,
           clock_in_latitude = excluded.clock_in_latitude, clock_in_longitude = excluded.clock_in_longitude,
           clock_in_accuracy_meters = excluded.clock_in_accuracy_meters, clock_in_distance_meters = excluded.clock_in_distance_meters,
-          clock_in_location_captured_at = excluded.clock_in_location_captured_at, updated_at = excluded.updated_at`,
+          clock_in_location_captured_at = excluded.clock_in_location_captured_at, updated_at = excluded.updated_at
+          WHERE attendance.clock_in IS NULL AND attendance.clock_out IS NULL`,
       [req.user.id, date, clockTimestamp, location?.latitude ?? null, location?.longitude ?? null, location?.accuracy ?? null,
         location?.distance ?? null, location?.capturedAt ?? null, now, now]);
+      if (!inserted.changes) return res.status(409).json({ error: 'Attendance has already been recorded. Refresh to see the latest status.' });
       const locationDetail = location ? ` Location verified ${Math.round(location.distance)} m from the office.` : '';
       await audit(req, 'Clocked in', `${req.user.name} clocked in at ${time}.${locationDetail}`, 'attendance', date);
       return res.json({ message: `Clocked in at ${time}.${location ? ' Office location verified.' : ''}` });
     }
     if (action === 'out') {
       if (!current?.clock_in || current.clock_out) return res.status(409).json({ error: 'There is no active clock-in to close.' });
-      await run(`UPDATE attendance SET clock_out = ?, clock_out_latitude = ?, clock_out_longitude = ?,
-        clock_out_accuracy_meters = ?, clock_out_distance_meters = ?, clock_out_location_captured_at = ?, updated_at = ? WHERE id = ?`,
+      const updated = await run(`UPDATE attendance SET clock_out = ?, clock_out_latitude = ?, clock_out_longitude = ?,
+        clock_out_accuracy_meters = ?, clock_out_distance_meters = ?, clock_out_location_captured_at = ?, updated_at = ?
+        WHERE id = ? AND clock_in IS NOT NULL AND clock_out IS NULL`,
       [clockTimestamp, location?.latitude ?? null, location?.longitude ?? null, location?.accuracy ?? null,
         location?.distance ?? null, location?.capturedAt ?? null, now, current.id]);
+      if (!updated.changes) return res.status(409).json({ error: 'This shift has already been closed. Refresh to see the latest status.' });
       const locationDetail = location ? ` Location verified ${Math.round(location.distance)} m from the office.` : '';
       await audit(req, 'Clocked out', `${req.user.name} clocked out at ${time}.${locationDetail}`, 'attendance', date);
       return res.json({ message: `Clocked out at ${time}.${location ? ' Office location verified.' : ''}` });
@@ -937,16 +1027,19 @@ app.post('/api/attendance/clock', authenticate, requirePasswordChangeComplete, a
 const CARDING_CATEGORIES = ['service', 'income', 'expense'];
 
 function nonNegativeInteger(value) {
-  const number = Math.round(Number(value || 0));
-  return Number.isFinite(number) ? Math.max(0, number) : 0;
+  return cardCount(value);
 }
 
 function cardingValues(body) {
-  const category = CARDING_CATEGORIES.includes(body.category) ? body.category : 'service';
+  if (!CARDING_CATEGORIES.includes(body.category)) throw invalid('Choose a valid entry category.');
+  if (!dateOrNull(body.record_date)) throw invalid('Enter a valid record date.');
+  const category = body.category;
   const paidCards = nonNegativeInteger(body.paid_cards);
   const unpaidCards = nonNegativeInteger(body.unpaid_cards);
   const rate = cleanMoney(body.rate);
   const amount = cleanMoney(body.amount);
+  if (rate < 0 || amount < 0) throw invalid('Rate and amount cannot be negative. Choose Expense to record an expense.');
+  const serviceTotal = cleanMoney(paidCards * rate);
   return {
     record_date: dateOrNull(body.record_date) || malaysiaDate(),
     category,
@@ -955,7 +1048,7 @@ function cardingValues(body) {
     unpaid_cards: unpaidCards,
     rate,
     amount,
-    net_amount: category === 'service' ? paidCards * rate : category === 'expense' ? -Math.abs(amount) : Math.abs(amount),
+    net_amount: category === 'service' ? serviceTotal : category === 'expense' ? -amount : amount,
     payment_method: String(body.payment_method || 'Not recorded').trim().slice(0, 80),
     notes: String(body.notes || '').trim().slice(0, 1000)
   };
@@ -1028,11 +1121,11 @@ app.post('/api/carding/import/preview', ...requirePermission('carding:edit'), im
       worksheet.eachRow((sourceRow, rowNumber) => {
         if (rowNumber <= header.rowNumber || rows.length >= 10000) return;
         const rawDate = spreadsheetValue(cell(sourceRow, 'date'));
-        if (rawDate) currentDate = dateOrNull(rawDate) || currentDate;
+        if (rawDate) currentDate = dateOrNull(rawDate) || '';
         const serviceType = spreadsheetValue(cell(sourceRow, 'service type'));
         if (!serviceType || /totals?|month total/i.test(serviceType)) return;
-        const paidCards = nonNegativeInteger(cell(sourceRow, 'paid (cards)'));
-        const unpaidCards = nonNegativeInteger(cell(sourceRow, 'unpaid (cards)'));
+        const paidCards = nonNegativeInteger(spreadsheetValue(cell(sourceRow, 'paid (cards)')));
+        const unpaidCards = nonNegativeInteger(spreadsheetValue(cell(sourceRow, 'unpaid (cards)')));
         const rate = cleanMoney(spreadsheetValue(cell(sourceRow, 'rate (rm)')));
         const net = cleanMoney(spreadsheetValue(cell(sourceRow, 'net income (rm)')));
         const category = /card delivery|other expense/i.test(serviceType) ? 'expense' : paidCards || unpaidCards ? 'service' : 'income';
@@ -1081,13 +1174,14 @@ const FINANCE_METHODS = ['Cash', 'Bank transfer', 'E-wallet', 'Cheque', 'Not rec
 const FINANCE_STATUSES = ['Paid', 'Partial', 'Pending', 'Not recorded'];
 
 function cleanMoney(value) {
-  const number = Number(String(value ?? '').replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(number) ? Math.round(number * 100) / 100 : 0;
+  return money(value);
 }
 
 function financeValues(body) {
+  if (!dateOrNull(body.payment_date)) throw invalid('Enter a valid payment date.');
   const amount = cleanMoney(body.amount);
   const deduction = cleanMoney(body.deduction);
+  if (amount < 0 || deduction < 0) throw invalid('Amount and deduction cannot be negative.');
   return {
     payment_date: dateOrNull(body.payment_date) || malaysiaDate(),
     concern_person: String(body.concern_person || '').trim().slice(0, 180),
@@ -1169,7 +1263,7 @@ app.post('/api/finance/import', ...requirePermission('finance:edit'), importUplo
           const concernNumber = spreadsheetValue(row.getCell(4).value).slice(0, 80);
           const amount = cleanMoney(spreadsheetValue(row.getCell(5).value));
           const deduction = cleanMoney(spreadsheetValue(row.getCell(6).value));
-          const netAmount = cleanMoney(spreadsheetValue(row.getCell(7).value));
+          const netAmount = importNetAmount(spreadsheetValue(row.getCell(7).value), amount, deduction);
           const notes = spreadsheetValue(row.getCell(8).value).slice(0, 1000);
           if (!paymentDate || (!concernPerson && !concernNumber && !amount && !deduction && !netAmount)) continue;
           const sourceKey = crypto.createHash('sha256').update([sheet.name, rowNumber, paymentDate, concernPerson, concernNumber, amount, deduction, netAmount, notes].join('|')).digest('hex');
@@ -1177,7 +1271,7 @@ app.post('/api/finance/import', ...requirePermission('finance:edit'), importUplo
             (payment_date, concern_person, concern_number, amount, deduction, net_amount, payment_method, payment_status, notes, source_name, source_key, created_by, updated_by)
             VALUES (?, ?, ?, ?, ?, ?, 'Not recorded', 'Not recorded', ?, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING RETURNING id`,
-          [paymentDate, concernPerson, concernNumber, amount, deduction, netAmount || amount - deduction, notes, `${req.file.originalname} · ${sheet.name}`, sourceKey, req.user.id, req.user.id]);
+          [paymentDate, concernPerson, concernNumber, amount, deduction, netAmount, notes, `${req.file.originalname} · ${sheet.name}`, sourceKey, req.user.id, req.user.id]);
           if (result.changes) imported += 1; else skipped += 1;
         }
       }
@@ -1230,16 +1324,41 @@ app.put('/api/hr/staff/:userId', ...requirePermission('hr:edit'), async (req, re
   } catch (error) { next(error); }
 });
 
-app.get('/api/users', ...requirePermission('users:manage'), async (_req, res, next) => {
+app.get('/api/users', ...requirePermission('users:manage'), async (req, res, next) => {
   try {
     const users = await all(`SELECT id, name, email, role, active, must_change_password, created_at
       FROM users WHERE deleted_at IS NULL ORDER BY active DESC, name`);
-    res.json({ users: users.map(user => ({ ...user, created_at: displayTimestamp(user.created_at), access_summary: roleSummary(user.role) })) });
+    const activeAdminCount = users.filter(user => user.role === 'admin' && user.active).length;
+    res.json({
+      users: users.map(user => ({ ...user, created_at: displayTimestamp(user.created_at), access_summary: roleSummary(user.role),
+        ...accountCapabilities(req.user, user, activeAdminCount) })),
+      roles: Object.entries(ROLE_LABELS).map(([id, label]) => ({ id, label, summary: roleSummary(id), permissions: ROLE_PERMISSIONS[id],
+        assignable: id !== 'admin' || req.user.role === 'admin' })),
+      activeAdminCount
+    });
   } catch (error) { next(error); }
 });
 
 function roleSummary(role) {
-  return ({ admin: 'Full system access including office settings', chair: 'Oversight, records, carding, finance, HR, printing and users', secretary: 'Member lookup and form printing', hr: 'Attendance, staff profiles and people operations', card_printing: 'Records, photos, printing and daily carding', data_management: 'Records, import and export', finance: 'Payment, daily carding, expense and finance summaries' })[role] || 'Limited access';
+  return ({ admin: 'Full system access including office settings', chair: 'Oversight, records, carding, finance, HR, printing and non-admin roles', secretary: 'Member lookup and form printing', hr: 'Attendance, staff profiles and people operations', card_printing: 'Records, photos, printing and daily carding', data_management: 'Records, import and export', finance: 'Payment, daily carding, expense and finance summaries' })[role] || 'Limited access';
+}
+
+function requestError(status, message) {
+  const error = new Error(message); error.status = status; return error;
+}
+
+async function manageAccounts(req, callback) {
+  return transaction(async tx => {
+    // Serialize all account mutations, including the bootstrap/admin CLI, so
+    // two requests cannot both remove what each thinks is the other admin.
+    await tx.run('SELECT pg_advisory_xact_lock(771462, 2)');
+    const actor = await tx.get(`SELECT users.* FROM users JOIN sessions ON sessions.user_id = users.id
+      WHERE sessions.token_hash = ? AND sessions.expires_at > NOW() AND users.active = TRUE AND users.deleted_at IS NULL`, [req.sessionTokenHash]);
+    if (!actor || actor.must_change_password || !ROLE_PERMISSIONS[actor.role]?.includes('users:manage')) {
+      throw requestError(403, 'Your access has changed. Refresh the page and sign in again.');
+    }
+    return callback(tx, actor);
+  });
 }
 
 app.post('/api/users', ...requirePermission('users:manage'), async (req, res, next) => {
@@ -1247,12 +1366,14 @@ app.post('/api/users', ...requirePermission('users:manage'), async (req, res, ne
     const name = String(req.body.name || '').trim(); const email = String(req.body.email || '').trim().toLowerCase();
     const password = String(req.body.password || ''); const role = String(req.body.role || '');
     const policyError = passwordPolicyError(password);
-    if (!name || !email.includes('@') || !ROLE_LABELS[role]) return res.status(400).json({ error: 'Name, valid email and role are required.' });
-    if (role === 'admin' && req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can create another administrator.' });
+    if (!name || name.length > 160 || !validEmail(email) || !Object.prototype.hasOwnProperty.call(ROLE_LABELS, role)) return res.status(400).json({ error: 'A name up to 160 characters, valid email and supported role are required.' });
     if (policyError) return res.status(400).json({ error: policyError.replace('new password', 'temporary password') });
-    const now = new Date();
-    const result = await run(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
-      VALUES (?, ?, ?, ?, TRUE, TRUE, ?, ?) RETURNING id`, [name, email, hashPassword(password), role, now, now]);
+    const passwordHash = await hashPassword(password);
+    const result = await manageAccounts(req, async (tx, actor) => {
+      if (role === 'admin' && actor.role !== 'admin') throw requestError(403, 'Only an administrator can create another administrator.');
+      return tx.run(`INSERT INTO users (name, email, password_hash, role, active, must_change_password, created_at, updated_at)
+        VALUES (?, ?, ?, ?, TRUE, TRUE, NOW(), NOW()) RETURNING id`, [name, email, passwordHash, role]);
+    });
     await audit(req, 'Staff account created', `${name} · ${ROLE_LABELS[role]}`, 'user', result.lastID);
     res.status(201).json({ id: result.lastID });
   } catch (error) { if (error.code === '23505') return res.status(409).json({ error: 'A user with that email already exists.' }); next(error); }
@@ -1260,64 +1381,86 @@ app.post('/api/users', ...requirePermission('users:manage'), async (req, res, ne
 
 app.put('/api/users/:id', ...requirePermission('users:manage'), async (req, res, next) => {
   try {
-    const target = await get('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]); if (!target) return res.status(404).json({ error: 'User not found.' });
-    const editingAccountDetails = ['name', 'email', 'active'].some(field => Object.prototype.hasOwnProperty.call(req.body, field));
-    if (editingAccountDetails && req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can edit staff account details.' });
-    const name = Object.prototype.hasOwnProperty.call(req.body, 'name') ? String(req.body.name || '').trim() : target.name;
-    const email = Object.prototype.hasOwnProperty.call(req.body, 'email') ? String(req.body.email || '').trim().toLowerCase() : target.email;
-    const role = Object.prototype.hasOwnProperty.call(req.body, 'role') ? String(req.body.role || '') : target.role;
-    const active = typeof req.body.active === 'boolean' ? req.body.active : Boolean(target.active);
-    if (!name || name.length > 160) return res.status(400).json({ error: 'Enter a staff name no longer than 160 characters.' });
-    if (!email.includes('@') || email.length > 254) return res.status(400).json({ error: 'Enter a valid email address.' });
-    if (!ROLE_LABELS[role]) return res.status(400).json({ error: 'Choose a valid role.' });
-    if (req.user.role !== 'admin' && (target.role === 'admin' || role === 'admin')) {
-      return res.status(403).json({ error: 'Only an administrator can assign or change administrator access.' });
-    }
-    if (Number(target.id) === Number(req.user.id) && !active) return res.status(409).json({ error: 'You cannot deactivate the account you are currently using.' });
-    if (target.role === 'admin' && target.active && (role !== 'admin' || !active)) {
-      const otherAdmins = await get(`SELECT COUNT(*)::int AS count FROM users
-        WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [target.id]);
-      if (!otherAdmins.count) return res.status(409).json({ error: 'Assign another active administrator before changing or deactivating the last administrator.' });
-    }
-    await transaction(async ({ run: txRun }) => {
-      await txRun('UPDATE users SET name = ?, email = ?, role = ?, active = ?, updated_at = NOW() WHERE id = ?', [name, email, role, active, target.id]);
-      if (!active) await txRun('DELETE FROM sessions WHERE user_id = ?', [target.id]);
+    const result = await manageAccounts(req, async (tx, actor) => {
+      const target = await tx.get('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]);
+      if (!target) throw requestError(404, 'User not found.');
+      const has = field => Object.prototype.hasOwnProperty.call(req.body, field);
+      if (['name', 'email', 'active'].some(has) && actor.role !== 'admin') throw requestError(403, 'Only an administrator can edit staff account details.');
+      if (has('active') && typeof req.body.active !== 'boolean') throw requestError(400, 'Account status must be active or inactive.');
+      const name = has('name') ? String(req.body.name || '').trim() : target.name;
+      const email = has('email') ? String(req.body.email || '').trim().toLowerCase() : target.email;
+      const role = has('role') ? String(req.body.role || '') : target.role;
+      const active = has('active') ? req.body.active : Boolean(target.active);
+      if (!name || name.length > 160) throw requestError(400, 'Enter a staff name no longer than 160 characters.');
+      if (!validEmail(email)) throw requestError(400, 'Enter a valid email address.');
+      if (!Object.prototype.hasOwnProperty.call(ROLE_LABELS, role)) throw requestError(400, 'Choose a valid role.');
+      if (actor.role !== 'admin' && (target.role === 'admin' || role === 'admin')) throw requestError(403, 'Only an administrator can assign or change administrator access.');
+      if (String(target.id) === String(actor.id) && (role !== target.role || !active)) throw requestError(409, 'You cannot change your own role or deactivate the account you are currently using.');
+      if (target.role === 'admin' && target.active && (role !== 'admin' || !active)) {
+        const otherAdmins = await tx.get(`SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [target.id]);
+        if (!otherAdmins.count) throw requestError(409, 'Assign another active administrator before changing or deactivating the last administrator.');
+      }
+      await tx.run('UPDATE users SET name = ?, email = ?, role = ?, active = ?, updated_at = NOW() WHERE id = ?', [name, email, role, active, target.id]);
+      if (!active || role !== target.role) await tx.run('DELETE FROM sessions WHERE user_id = ?', [target.id]);
+      const changes = [];
+      if (name !== target.name) changes.push(`name: ${target.name} → ${name}`);
+      if (email !== target.email) changes.push(`email: ${target.email} → ${email}`);
+      if (role !== target.role) changes.push(`role: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`);
+      if (active !== Boolean(target.active)) changes.push(active ? 'account reactivated' : 'account deactivated');
+      return { updated: { ...target, name, email, role, active }, changes };
     });
-    const changes = [];
-    if (name !== target.name) changes.push(`name: ${target.name} → ${name}`);
-    if (email !== target.email) changes.push(`email: ${target.email} → ${email}`);
-    if (role !== target.role) changes.push(`role: ${ROLE_LABELS[target.role]} → ${ROLE_LABELS[role]}`);
-    if (active !== Boolean(target.active)) changes.push(active ? 'account reactivated' : 'account deactivated');
-    await audit(req, 'Staff account updated', `${name} · ${changes.join('; ') || 'details saved without changes'}`, 'user', target.id);
-    const updated = await get('SELECT * FROM users WHERE id = ?', [target.id]);
-    res.json({ user: userPayload(updated), record: { id: updated.id, name: updated.name, email: updated.email, role: updated.role, active: Boolean(updated.active), must_change_password: Boolean(updated.must_change_password), access_summary: roleSummary(updated.role) } });
+    const { updated, changes } = result;
+    await audit(req, 'Staff account updated', `${updated.name} · ${changes.join('; ') || 'details saved without changes'}`, 'user', updated.id);
+    res.json({ user: userPayload(updated), record: { id: updated.id, name: updated.name, email: updated.email, role: updated.role, active: updated.active, must_change_password: Boolean(updated.must_change_password), access_summary: roleSummary(updated.role) } });
   } catch (error) { if (error.code === '23505') return res.status(409).json({ error: 'A user with that email already exists.' }); next(error); }
+});
+
+app.post('/api/users/:id/reset-password', ...requirePermission('users:manage'), async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can reset staff passwords.' });
+    const password = String(req.body.password || '');
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError.replace('new password', 'temporary password') });
+    const passwordHash = await hashPassword(password);
+    const target = await manageAccounts(req, async (tx, actor) => {
+      if (actor.role !== 'admin') throw requestError(403, 'Only an administrator can reset staff passwords.');
+      const user = await tx.get('SELECT id, name, active FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]);
+      if (!user) throw requestError(404, 'User not found.');
+      if (String(user.id) === String(actor.id)) throw requestError(409, 'Change your own password from Profile & access.');
+      if (!user.active) throw requestError(409, 'Reactivate the account before resetting its password.');
+      await tx.run('UPDATE users SET password_hash = ?, must_change_password = TRUE, password_changed_at = NOW(), updated_at = NOW() WHERE id = ?', [passwordHash, user.id]);
+      await tx.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+      return user;
+    });
+    await audit(req, 'Staff password reset', `${target.name} · temporary password issued; existing sessions revoked.`, 'user', target.id);
+    res.json({ id: target.id });
+  } catch (error) { next(error); }
 });
 
 app.delete('/api/users/:id', ...requirePermission('users:manage'), async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only an administrator can delete staff accounts.' });
-    const target = await get('SELECT id, name, email, role, active FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]);
-    if (!target) return res.status(404).json({ error: 'User not found.' });
-    if (Number(target.id) === Number(req.user.id)) return res.status(409).json({ error: 'You cannot delete the account you are currently using.' });
-    if (target.role === 'admin' && target.active) {
-      const otherAdmins = await get(`SELECT COUNT(*)::int AS count FROM users
-        WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [target.id]);
-      if (!otherAdmins.count) return res.status(409).json({ error: 'Create another active administrator before deleting the last administrator.' });
-    }
-    const redactedEmail = `deleted+${target.id}.${Date.now()}@mro.invalid`;
-    await transaction(async ({ run: txRun }) => {
-      await txRun(`UPDATE users SET email = ?, active = FALSE, must_change_password = FALSE, deleted_at = NOW(), updated_at = NOW()
-        WHERE id = ?`, [redactedEmail, target.id]);
-      await txRun('DELETE FROM sessions WHERE user_id = ?', [target.id]);
+    const target = await manageAccounts(req, async (tx, actor) => {
+      if (actor.role !== 'admin') throw requestError(403, 'Only an administrator can delete staff accounts.');
+      const user = await tx.get('SELECT id, name, email, role, active FROM users WHERE id = ? AND deleted_at IS NULL', [req.params.id]);
+      if (!user) throw requestError(404, 'User not found.');
+      if (String(user.id) === String(actor.id)) throw requestError(409, 'You cannot delete the account you are currently using.');
+      if (String(req.body?.confirmation || '').trim().toLowerCase() !== user.email.toLowerCase()) throw requestError(400, 'Type the staff email address to confirm account deletion.');
+      if (user.role === 'admin' && user.active) {
+        const otherAdmins = await tx.get(`SELECT COUNT(*)::int AS count FROM users WHERE role = 'admin' AND active = TRUE AND deleted_at IS NULL AND id <> ?`, [user.id]);
+        if (!otherAdmins.count) throw requestError(409, 'Create another active administrator before deleting the last administrator.');
+      }
+      await tx.run(`UPDATE users SET email = ?, active = FALSE, must_change_password = FALSE, deleted_at = NOW(), updated_at = NOW()
+        WHERE id = ?`, [`deleted+${user.id}.${crypto.randomUUID()}@mro.invalid`, user.id]);
+      await tx.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+      return user;
     });
     await audit(req, 'Staff account deleted', `${target.name} · ${ROLE_LABELS[target.role]} · access revoked; historical records retained.`, 'user', target.id);
     res.status(204).end();
   } catch (error) { next(error); }
 });
 
-app.get('/api/audit', ...requirePermission('audit:view'), async (_req, res, next) => {
-  try { res.json({ activity: (await all('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 250')).map(auditPayload) }); }
+app.get('/api/audit', ...requirePermission('audit:view'), async (req, res, next) => {
+  try { res.json({ activity: (await visibleAuditRows(req.user, 250)).map(auditPayload) }); }
   catch (error) { next(error); }
 });
 
@@ -1340,24 +1483,34 @@ app.use((error, req, res, _next) => {
     const databaseUnavailable = ['ECONNREFUSED', '57P01', '57P03', '08001', '08006'].includes(error.code);
     const status = databaseUnavailable ? 503 : Number.isInteger(error.status) ? error.status : 500;
     return res.status(status).json({
-      error: databaseUnavailable ? 'PostgreSQL is unavailable. Start the PostgreSQL service and try again.' : error.status ? error.message : 'The server could not complete this request.'
+      error: databaseUnavailable ? 'PostgreSQL is unavailable. Start the PostgreSQL service and try again.' : error.status ? error.message : 'The server could not complete this request.',
+      ...(error.responseCode ? { code: error.responseCode } : {})
     });
   }
-  return res.status(500).send('Internal Server Error');
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 500 ? error.status : 500;
+  return res.status(status).send(status === 404 ? 'Not found.' : status === 403 ? 'Access denied.' : 'Internal Server Error');
 });
 
 let server;
-initializeDatabase().then(seedInitialUser).then(() => {
+async function startServer() {
+  await initializeDatabase();
+  await seedInitialUser();
   server = app.listen(PORT, () => console.log(`MRO Node server running at http://localhost:${PORT}`));
-}).catch(error => {
-  console.error('Unable to initialize MRO Registry:', error);
-  process.exitCode = 1;
-});
+  return server;
+}
 
 async function shutdown() {
   if (server) await new Promise(resolve => server.close(resolve));
   await closeDatabase();
 }
 
-process.once('SIGTERM', () => shutdown().finally(() => process.exit(0)));
-process.once('SIGINT', () => shutdown().finally(() => process.exit(0)));
+if (require.main === module) {
+  startServer().catch(error => {
+    console.error('Unable to initialize MRO Registry:', error);
+    process.exitCode = 1;
+  });
+  process.once('SIGTERM', () => shutdown().finally(() => process.exit(0)));
+  process.once('SIGINT', () => shutdown().finally(() => process.exit(0)));
+}
+
+module.exports = { app, startServer, shutdown, seedInitialUser, storePhoto, validPhotoBytes, boundedPhotoBuffer };
