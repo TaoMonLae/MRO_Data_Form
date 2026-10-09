@@ -53,7 +53,8 @@ const EMPTY_MEMBER = {
   reference: '', reference_number: '', fullname: '', gender: 'Male', dob: '', father_name: '', mother_name: '',
   arrival: '', email: '', phone: '', unhcr_status: 'No', unhcr_file_number: '',
   individual_number: '', country: 'Myanmar', ethnicity: 'Mon', religion: 'Buddhism',
-  address_state: '', vulnerability: 'N/A', consent: 'yes'
+  address_state: '', vulnerability: 'N/A', consent: 'yes', phone2: '', identity_documents: '',
+  identity_document_filename: '', family_members_in_malaysia: '', family_members_data: []
 };
 
 const EMPTY_FINANCE = {
@@ -941,18 +942,29 @@ function MembersPage({ user, showToast }) {
 }
 
 function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, onDelete }) {
-  const [form, setForm] = useState({ ...EMPTY_MEMBER, ...member, dob: dateForInput(member.dob), arrival: dateForInput(member.arrival) });
+  const [form, setForm] = useState({ ...EMPTY_MEMBER, ...member, dob: dateForInput(member.dob), arrival: dateForInput(member.arrival),
+    family_members_data: Array.isArray(member.family_members_data) ? member.family_members_data : [] });
   const [photo, setPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const savePending = useRef(false);
   const closeDrawer = () => { if (!savePending.current) onClose(); };
   const set = (name, value) => setForm(current => ({ ...current, [name]: value }));
+  const setRelative = (index, name, value) => setForm(current => ({ ...current,
+    family_members_data: current.family_members_data.map((relative, position) => position === index ? { ...relative, [name]: value } : relative)
+  }));
+  const addRelative = () => setForm(current => ({ ...current, family_members_data: [...current.family_members_data,
+    { fullname: '', country: current.country || 'Myanmar', ethnicity: current.ethnicity || 'Mon', religion: '', gender: '', relationship: '', dob: '', arrival: '', identity_documents: '' }] }));
+  const removeRelative = index => setForm(current => ({ ...current,
+    family_members_data: current.family_members_data.filter((_, position) => position !== index)
+  }));
 
   async function submit(event) {
     event.preventDefault(); if (!canEdit || savePending.current) return;
     savePending.current = true; setFormError('');
-    const data = new FormData(); Object.entries(form).forEach(([key, value]) => value != null && data.append(key, value)); if (photo) data.append('photo', photo);
+    const data = new FormData(); Object.entries(form).forEach(([key, value]) => key !== 'family_members_data' && value != null && data.append(key, value));
+    data.set('family_members_data', JSON.stringify(form.family_members_data));
+    if (photo) data.append('photo', photo);
     setSaving(true); try { await onSave(data, member.id); } catch (error) { setFormError(error.message); } finally { savePending.current = false; setSaving(false); }
   }
 
@@ -970,7 +982,7 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
           <Field label="Mother's name"><input value={form.mother_name || ''} onChange={e => set('mother_name', e.target.value)} disabled={!canEdit} /></Field>
           <Field label="Date of arrival in Malaysia"><input type="date" value={form.arrival} onChange={e => set('arrival', e.target.value)} disabled={!canEdit} /></Field>
         </div></FormSection>
-        <FormSection title="Contact"><div className="form-grid"><Field label="Email"><input type="email" value={form.email || ''} onChange={e => set('email', e.target.value)} disabled={!canEdit} /></Field><Field label="Phone number"><input value={form.phone || ''} onChange={e => set('phone', e.target.value)} disabled={!canEdit} /></Field></div></FormSection>
+        <FormSection title="Contact"><div className="form-grid"><Field label="Email"><input type="email" value={form.email || ''} onChange={e => set('email', e.target.value)} disabled={!canEdit} /></Field><Field label="Phone number"><input value={form.phone || ''} onChange={e => set('phone', e.target.value)} disabled={!canEdit} /></Field><Field label="Secondary phone number"><input value={form.phone2 || ''} onChange={e => set('phone2', e.target.value)} disabled={!canEdit} /></Field></div></FormSection>
         <FormSection title="UNHCR & registration"><div className="form-grid">
           <Field label="Registered with UNHCR?"><select value={form.unhcr_status || 'No'} onChange={e => set('unhcr_status', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></Field>
           <Field label="UNHCR file number"><input value={form.unhcr_file_number || ''} onChange={e => set('unhcr_file_number', e.target.value)} disabled={!canEdit || form.unhcr_status !== 'Yes'} /></Field>
@@ -979,7 +991,31 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
           <Field label="Ethnicity"><input value={form.ethnicity || ''} onChange={e => set('ethnicity', e.target.value)} disabled={!canEdit} /></Field>
           <Field label="Religion"><input value={form.religion || ''} onChange={e => set('religion', e.target.value)} disabled={!canEdit} /></Field>
         </div></FormSection>
-        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" disabled={saving} onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={closeDrawer} disabled={saving}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview form' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
+        <FormSection title="Documents and consent"><div className="form-grid">
+          <Field label="Identity documents"><select value={form.identity_documents || ''} onChange={e => set('identity_documents', e.target.value)} disabled={!canEdit}><option value="">Not recorded</option><option>Other identity documents</option></select></Field>
+          <Field label="Identity document file name" hint="Use the name of a file already held by the office; this field does not upload it."><input value={form.identity_document_filename || ''} onChange={e => set('identity_document_filename', e.target.value)} disabled={!canEdit} /></Field>
+          <Field label="Consent"><select value={form.consent || ''} onChange={e => set('consent', e.target.value)} disabled={!canEdit}><option value="yes">Given</option><option value="no">Not given</option></select></Field>
+        </div></FormSection>
+        <FormSection title="Family members"><div className="form-grid"><Field label="Are all listed family members in Malaysia?"><select value={form.family_members_in_malaysia || ''} onChange={e => set('family_members_in_malaysia', e.target.value)} disabled={!canEdit || !form.family_members_data.length}><option value="">Not recorded</option><option>Yes</option><option>No</option></select></Field></div>
+          {form.family_members_data.map((relative, index) => <div className="family-editor" key={index}>
+            <div className="family-editor__heading"><h4>Family member {index + 1}</h4>{canEdit && <button type="button" className="text-link" onClick={() => removeRelative(index)}>Remove</button>}</div>
+            <div className="form-grid">
+              <Field label="Full name"><input value={relative.fullname || relative.name || ''} onChange={e => setRelative(index, 'fullname', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Relationship"><input value={relative.relationship || ''} onChange={e => setRelative(index, 'relationship', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Country of origin"><input value={relative.country || ''} onChange={e => setRelative(index, 'country', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Ethnicity"><input value={relative.ethnicity || ''} onChange={e => setRelative(index, 'ethnicity', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Religion"><input value={relative.religion || ''} onChange={e => setRelative(index, 'religion', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Gender"><select value={relative.gender || ''} onChange={e => setRelative(index, 'gender', e.target.value)} disabled={!canEdit}><option value="">Not recorded</option><option>Male</option><option>Female</option><option>Other</option></select></Field>
+              <Field label="Date of birth"><input type="date" value={dateForInput(relative.dob)} onChange={e => setRelative(index, 'dob', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Date of arrival in Malaysia"><input type="date" value={dateForInput(relative.arrival)} onChange={e => setRelative(index, 'arrival', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Identity documents"><select value={relative.identity_documents || ''} onChange={e => setRelative(index, 'identity_documents', e.target.value)} disabled={!canEdit}><option value="">Not recorded</option><option>Other identity documents</option></select></Field>
+              <Field label="Photo file name" hint="Existing office file name; this does not upload a photo."><input value={relative.photo_filename || ''} onChange={e => setRelative(index, 'photo_filename', e.target.value)} disabled={!canEdit} /></Field>
+              <Field label="Identity document file name" hint="Existing office file name; this does not upload a document."><input value={relative.identity_document_filename || ''} onChange={e => setRelative(index, 'identity_document_filename', e.target.value)} disabled={!canEdit} /></Field>
+            </div>
+          </div>)}
+          {canEdit && <Button type="button" variant="secondary" icon={Plus} disabled={form.family_members_data.length >= 20} onClick={addRelative}>Add family member</Button>}
+        </FormSection>
+        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" disabled={saving} onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={closeDrawer} disabled={saving}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview the last saved form; save any edits first' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview saved form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
       </form>
     </aside>
   </ModalFrame>;

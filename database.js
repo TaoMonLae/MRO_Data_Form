@@ -147,12 +147,18 @@ async function initializeDatabase() {
       vulnerability TEXT NOT NULL DEFAULT 'N/A',
       consent TEXT NOT NULL DEFAULT 'yes',
       family_members_data JSONB NOT NULL DEFAULT '[]'::jsonb,
+      identity_documents TEXT NOT NULL DEFAULT '',
+      identity_document_filename TEXT NOT NULL DEFAULT '',
+      family_members_in_malaysia TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL
     );
 
     ALTER TABLE submissions ADD COLUMN IF NOT EXISTS reference_number VARCHAR(80) NOT NULL DEFAULT '';
+    ALTER TABLE submissions ADD COLUMN IF NOT EXISTS identity_documents TEXT NOT NULL DEFAULT '';
+    ALTER TABLE submissions ADD COLUMN IF NOT EXISTS identity_document_filename TEXT NOT NULL DEFAULT '';
+    ALTER TABLE submissions ADD COLUMN IF NOT EXISTS family_members_in_malaysia TEXT NOT NULL DEFAULT '';
     CREATE UNIQUE INDEX IF NOT EXISTS submissions_reference_number_unique
       ON submissions (LOWER(reference_number)) WHERE reference_number <> '';
     CREATE INDEX IF NOT EXISTS submissions_fullname_search ON submissions (LOWER(fullname));

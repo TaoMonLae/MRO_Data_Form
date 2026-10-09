@@ -13,6 +13,7 @@ const { invalid, validIsoDate, money, count: cardCount, importNetAmount } = requ
 require('dotenv').config();
 const { run, get, all, transaction, initializeDatabase, closeDatabase } = require('./database');
 const { parseCookies, hashPassword, verifyPassword, protectMutation, createRateLimiter, accountCapabilities } = require('./security');
+const { referenceFormHtml, familyData } = require('./print-form');
 
 const app = express();
 const ROOT = __dirname;
@@ -545,10 +546,28 @@ app.get('/api/members', ...requirePermission('members:view'), async (req, res, n
 });
 
 const MEMBER_FIELDS = ['reference', 'reference_number', 'unhcr_status', 'unhcr_file_number', 'individual_number', 'fullname', 'father_name', 'mother_name',
-  'email', 'phone', 'phone2', 'country', 'ethnicity', 'religion', 'gender', 'dob', 'arrival', 'address_state', 'vulnerability', 'consent'];
+  'email', 'phone', 'phone2', 'country', 'ethnicity', 'religion', 'gender', 'dob', 'arrival', 'address_state', 'vulnerability', 'consent',
+  'identity_documents', 'identity_document_filename', 'family_members_in_malaysia'];
 
 function memberValues(body) {
   return Object.fromEntries(MEMBER_FIELDS.map(field => [field, String(body[field] ?? '').trim()]));
+}
+
+function memberFamily(body) {
+  let relatives;
+  try { relatives = Array.isArray(body.family_members_data) ? body.family_members_data : JSON.parse(body.family_members_data || '[]'); }
+  catch { throw requestError(400, 'Family member details must be a valid list.'); }
+  if (!Array.isArray(relatives)) throw requestError(400, 'Family member details must be a valid list.');
+  if (relatives.length > 20) throw requestError(400, 'Add no more than 20 family members to one request.');
+  const clean = relatives.map(relative => {
+    if (!relative || typeof relative !== 'object' || Array.isArray(relative)) throw requestError(400, 'Each family member needs a valid record.');
+    return { ...relative, ...Object.fromEntries(['fullname', 'country', 'ethnicity', 'religion', 'gender', 'relationship', 'dob', 'arrival', 'photo_filename', 'identity_documents', 'identity_document_filename']
+      .map(key => [key, String(relative[key] ?? (key === 'fullname' ? relative.name || '' : '')).trim().slice(0, 200)])) };
+  });
+  if (clean.some(relative => (relative.dob && !dateOrNull(relative.dob)) || (relative.arrival && !dateOrNull(relative.arrival)))) {
+    throw requestError(400, 'Enter valid family member dates or leave them blank.');
+  }
+  return clean;
 }
 
 async function storePhoto(file, reference, previousPath = '') {
@@ -581,6 +600,7 @@ app.post('/api/members', ...requirePermission('members:edit'), photoUpload.singl
   let photoPath = '';
   try {
     const values = memberValues(req.body);
+    const relatives = memberFamily(req.body);
     if (!safeReference(values.reference) || !values.fullname) return res.status(400).json({ error: 'MRO status number and full name are required.' });
     if (['dob', 'arrival'].some(field => values[field] && !dateOrNull(values[field]))) return res.status(400).json({ error: 'Enter a valid date of birth and arrival date, or leave them blank.' });
     values.reference = safeReference(values.reference);
@@ -589,7 +609,7 @@ app.post('/api/members', ...requirePermission('members:edit'), photoUpload.singl
     const now = new Date();
     const columns = [...MEMBER_FIELDS, 'photo_path', 'family_members', 'family_members_data', 'created_at', 'updated_at', 'updated_by'];
     const result = await run(`INSERT INTO submissions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')}) RETURNING id`,
-      [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, 0, '[]', now, now, req.user.id]);
+      [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, relatives.length, JSON.stringify(relatives), now, now, req.user.id]);
     completed = true;
     await audit(req, 'Member record created', `${values.reference} · ${values.fullname}`, 'member', result.lastID);
     res.status(201).json({ id: result.lastID });
@@ -607,6 +627,7 @@ app.put('/api/members/:id', ...requirePermission('members:edit'), photoUpload.si
   let photoPath = ''; let previousPath = '';
   try {
     const values = memberValues(req.body);
+    const relatives = Object.hasOwn(req.body, 'family_members_data') ? memberFamily(req.body) : null;
     if (!safeReference(values.reference) || !values.fullname) return res.status(400).json({ error: 'MRO status number and full name are required.' });
     if (['dob', 'arrival'].some(field => values[field] && !dateOrNull(values[field]))) return res.status(400).json({ error: 'Enter a valid date of birth and arrival date, or leave them blank.' });
     values.reference = safeReference(values.reference);
@@ -614,10 +635,14 @@ app.put('/api/members/:id', ...requirePermission('members:edit'), photoUpload.si
     await transaction(async tx => {
       const existing = await tx.get('SELECT * FROM submissions WHERE id = ? FOR UPDATE', [req.params.id]);
       if (!existing) throw requestError(404, 'Member record not found.');
+      for (const field of ['identity_documents', 'identity_document_filename', 'family_members_in_malaysia']) {
+        if (!Object.hasOwn(req.body, field)) values[field] = existing[field];
+      }
+      const savedRelatives = relatives ?? familyData(existing.family_members_data);
       previousPath = existing.photo_path;
       photoPath = await storePhoto(req.file, values.reference, previousPath);
-      await tx.run(`UPDATE submissions SET ${MEMBER_FIELDS.map(field => `${field} = ?`).join(', ')}, photo_path = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-        [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, new Date(), req.user.id, req.params.id]);
+      await tx.run(`UPDATE submissions SET ${MEMBER_FIELDS.map(field => `${field} = ?`).join(', ')}, photo_path = ?, family_members = ?, family_members_data = ?::jsonb, updated_at = ?, updated_by = ? WHERE id = ?`,
+        [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), photoPath, savedRelatives.length, JSON.stringify(savedRelatives), new Date(), req.user.id, req.params.id]);
     });
     completed = true;
     if (photoPath !== previousPath) await removeManagedPhoto(previousPath);
@@ -857,43 +882,6 @@ app.get('/api/members/export', ...requirePermission('members:export'), async (re
     res.send(buffer);
   } catch (error) { next(error); }
 });
-
-function referenceFormHtml(member) {
-  const logoPath = path.join(ROOT, 'public', 'unLogo.png');
-  const logo = fs.existsSync(logoPath) ? `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}` : '';
-  const yesNo = member.unhcr_status === 'Yes' ? 'Yes, I am registered' : 'No, I am not registered';
-  const pageOneFields = [
-    ['Reference number', member.reference_number], ['Are you registered with UNHCR?', yesNo],
-    ...(member.unhcr_status === 'Yes' ? [['UNHCR file number', member.unhcr_file_number], ['Individual number', member.individual_number]] : []),
-    ['Full name', member.fullname], ['Email', member.email], ['Phone number', member.phone], ['Country of origin', member.country], ['Ethnicity', member.ethnicity],
-    ['Religion', member.religion], ['Gender', member.gender], ['Date of birth', toDisplayDate(member.dob)],
-    ['Date of arrival in Malaysia', toDisplayDate(member.arrival)],
-    ['I have the following documents (optional) (Checked)', 'Other identity documents'],
-    ['I have the following documents (optional) (Other identity documents)', 'Other identity documents'],
-    ['Number of additional family members to be registered', member.family_members || '0']
-  ];
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-    @page { size: A4; margin: 13mm 15mm 15mm; }
-    * { box-sizing: border-box; } body { margin: 0; color: #111; font: 12px/1.45 Arial, sans-serif; }
-    header { height: 35mm; display: grid; place-content: center; }
-    header img { width: 77mm; max-height: 27mm; object-fit: contain; }
-    .form { border: 1px solid #d4d4d4; }
-    .title { width: 64%; min-height: 7mm; padding: 3px 7px; background: #e5e5e5; font-size: 14px; }
-    .row { break-inside: avoid; }
-    .label { min-height: 6.7mm; padding: 3px 7px; background: #e8f1f9; border-top: 1px solid #e1e1e1; }
-    .value { min-height: 7.4mm; padding: 4px 12mm; background: #fff; border-top: 1px solid #ededed; }
-    .value:last-child { padding-bottom: 5px; }
-    .second-page { page-break-before: always; padding-top: 0; }
-    .second-page .title { margin-bottom: 0; }
-    .consent-value { min-height: 7.4mm; padding: 4px 12mm; }
-  </style></head><body><header>${logo ? `<img src="${logo}" alt="UNHCR">` : ''}</header><main class="form"><div class="title">New Registration Request</div>
-    ${pageOneFields.map(([label, value]) => `<section class="row"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value || '—')}</div></section>`).join('')}
-    <section class="row"><div class="label">Consent (Consent)</div></section></main>
-    <main class="form second-page"><div class="title">New Registration Request</div>
-      <div class="consent-value">${member.consent === 'yes' ? 'Checked' : 'Not checked'}</div>
-      <section class="row"><div class="label">Consent (Text)</div><div class="value">I hereby declare that the information provided is true, accurate and giving my permission to UNHCR to use it for the purpose of this form.</div></section>
-    </main></body></html>`;
-}
 
 let activePrintJobs = 0;
 app.get('/api/members/:id/print', ...requirePermission('print:forms'), async (req, res, next) => {

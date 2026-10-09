@@ -84,6 +84,7 @@ Member imports use a review-first workflow. Choose an Excel or CSV file from **M
 For bulk photos, create a ZIP containing JPG, JPEG or PNG files named exactly with the member’s MRO Status number, for example `53570.jpg`. Folder names inside the ZIP are ignored. The server validates image signatures, matches each filename to a member, stores matched photos in the private application upload area and reports unmatched, invalid or oversized files. Archives may contain up to 20,000 files; each photo is limited to 4 MB.
 
 Forms are printed directly from the print icon on each Member records row, so there is no separate Form Printing navigation item.
+The A4 form prints the saved MRO card number without its `MRO-` prefix in the title's right box and the Kuala Lumpur print date in `mm/dd/yyyy` at the upper left. Optional phone, document and family rows follow the saved member details. Save edits before using **Preview saved form** in the member drawer. See `PRINT_UI_AUDIT.md` for the scoped print audit and verification.
 
 All user-facing data dates use `dd-mm-yyyy`. PostgreSQL and browser date controls continue to use ISO `yyyy-mm-dd` internally so sorting, validation and storage remain reliable.
 
