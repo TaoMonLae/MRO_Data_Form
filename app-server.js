@@ -553,7 +553,7 @@ app.get('/api/members', ...requirePermission('members:view'), async (req, res, n
   } catch (error) { next(error); }
 });
 
-app.get('/api/members/:id', ...requirePermission('members:view'), async (req, res, next) => {
+app.get('/api/members/:id([0-9]+)', ...requirePermission('members:view'), async (req, res, next) => {
   try {
     const member = await get('SELECT * FROM submissions WHERE id = ?', [req.params.id]);
     if (!member) return res.status(404).json({ error: 'Member record not found.' });

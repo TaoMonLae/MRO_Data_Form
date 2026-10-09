@@ -59,6 +59,12 @@ test('API security and data regression suite', { skip: !process.env.MRO_TEST_DAT
     }
   });
 
+  await t.test('member detail routing preserves Excel exports', async () => {
+    const exported = await request('/api/members/export');
+    assert.equal(exported.status, 200);
+    assert.match(exported.response.headers.get('content-type'), /spreadsheetml/);
+  });
+
   await t.test('role matrix is enforced on the server', async () => {
     for (const role of ['secretary', 'finance', 'hr', 'card_printing', 'data_management']) assert.equal((await request('/api/users', { role })).status, 403);
     assert.equal((await request('/api/members', { role: 'finance' })).status, 403);
