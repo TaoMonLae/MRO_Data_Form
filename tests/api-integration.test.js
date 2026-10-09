@@ -116,6 +116,21 @@ test('API security and data regression suite', { skip: !process.env.MRO_TEST_DAT
     }
   });
 
+  await t.test('offline registrations sync once even when the client retries', async () => {
+    const operationId = crypto.randomUUID();
+    const body = { operationId, fields: { reference: 'AUDITOFFLINE', fullname: 'Offline Member', family_members_data: '[]' } };
+    assert.equal((await request('/api/members/offline-sync', { role: 'finance', method: 'POST', body })).status, 403);
+    const created = await request('/api/members/offline-sync', { role: 'data_management', method: 'POST', body });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    const retried = await request('/api/members/offline-sync', { role: 'data_management', method: 'POST', body });
+    assert.equal(retried.status, 200);
+    assert.equal(retried.data.id, created.data.id);
+    assert.equal((await db.get('SELECT COUNT(*)::int AS count FROM submissions WHERE reference = ?', ['AUDITOFFLINE'])).count, 1);
+    assert.equal((await db.get('SELECT COUNT(*)::int AS count FROM audit_logs WHERE action = ? AND entity_id = ?', ['Offline member registration synced', String(created.data.id)])).count, 1);
+    assert.equal((await request('/api/members/offline-sync', { role: 'admin', method: 'POST', body })).status, 409);
+    assert.equal((await request('/api/members/offline-sync', { role: 'data_management', method: 'POST', body: { ...body, operationId: crypto.randomUUID() } })).status, 409);
+  });
+
   await t.test('simultaneous clock actions produce one success and one conflict', async () => {
     for (const action of ['in', 'out']) {
       const results = await Promise.all([0, 1].map(() => request('/api/attendance/clock', { role: 'secretary', method: 'POST', body: { action } })));

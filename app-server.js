@@ -586,6 +586,42 @@ function memberFamily(body) {
   return clean;
 }
 
+app.post('/api/members/offline-sync', ...requirePermission('members:edit'), async (req, res, next) => {
+  try {
+    const operationId = String(req.body?.operationId || '');
+    const fields = req.body?.fields;
+    if (!/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i.test(operationId) || !fields || typeof fields !== 'object' || Array.isArray(fields)) {
+      throw requestError(400, 'The offline registration is invalid.');
+    }
+    const values = memberValues(fields);
+    const relatives = memberFamily(fields);
+    if (!safeReference(values.reference) || !values.fullname) throw requestError(400, 'MRO status number and full name are required.');
+    if (['dob', 'arrival'].some(field => values[field] && !dateOrNull(values[field]))) throw requestError(400, 'Enter a valid date of birth and arrival date, or leave them blank.');
+    values.reference = safeReference(values.reference);
+    values.reference_number = cleanReferenceNumber(values.reference_number);
+    const result = await transaction(async tx => {
+      const claimed = await tx.run('INSERT INTO offline_member_operations (id, user_id, member_id) VALUES (?, ?, NULL) ON CONFLICT DO NOTHING RETURNING id', [operationId, req.user.id]);
+      if (!claimed.changes) {
+        const existing = await tx.get('SELECT user_id, member_id FROM offline_member_operations WHERE id = ?', [operationId]);
+        if (String(existing?.user_id) !== String(req.user.id)) throw requestError(409, 'This offline registration belongs to another account.');
+        return { id: existing.member_id, repeated: true };
+      }
+      const now = new Date();
+      const columns = [...MEMBER_FIELDS, 'photo_path', 'family_members', 'family_members_data', 'created_at', 'updated_at', 'updated_by'];
+      const inserted = await tx.run(`INSERT INTO submissions (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')}) RETURNING id`,
+        [...MEMBER_FIELDS.map(field => field === 'dob' || field === 'arrival' ? dateOrNull(values[field]) : values[field]), '', relatives.length, JSON.stringify(relatives), now, now, req.user.id]);
+      await tx.run('UPDATE offline_member_operations SET member_id = ? WHERE id = ?', [inserted.lastID, operationId]);
+      await tx.run('INSERT INTO audit_logs (user_id, actor_name, action, detail, entity_type, entity_id, ip_address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [req.user.id, req.user.name, 'Offline member registration synced', `${values.reference} · ${values.fullname}`, 'member', String(inserted.lastID), req.ip, now]);
+      return { id: inserted.lastID, repeated: false };
+    });
+    res.status(result.repeated ? 200 : 201).json({ id: result.id, repeated: result.repeated });
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ error: 'That MRO status number or reference number already exists. Review this record before retrying.' });
+    next(error);
+  }
+});
+
 async function storePhoto(file, reference, previousPath = '') {
   if (!file) return previousPath || '';
   const clean = safeReference(reference);
@@ -1472,6 +1508,7 @@ app.get('/api/audit', ...requirePermission('audit:view'), async (req, res, next)
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }));
 
 if (HAS_CLIENT_BUILD) {
+  app.get('/sw.js', (_req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(ROOT, 'dist', 'sw.js')));
   app.use(express.static(path.join(ROOT, 'dist'), { index: false }));
   app.get('*', (_req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(ROOT, 'dist', 'index.html')));
 } else {

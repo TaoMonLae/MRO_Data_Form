@@ -164,6 +164,13 @@ async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS submissions_fullname_search ON submissions (LOWER(fullname));
     CREATE INDEX IF NOT EXISTS submissions_created_at ON submissions (created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS offline_member_operations (
+      id UUID PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      member_id BIGINT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

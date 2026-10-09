@@ -9,6 +9,7 @@ import {
   Sparkles, Sun, Trash2, Upload, UserCog, UserRound, Users, Workflow, X, CheckCircle2, AlertTriangle
 } from 'lucide-react';
 import { api } from './api';
+import OfflinePage from './OfflinePage';
 const LazyThreads = lazy(() => import('./components/reactbits/Threads'));
 
 function Threads(props) {
@@ -441,6 +442,7 @@ function LoginPage({ onLogin }) {
         <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></label>
         <Button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'}</Button>
         <p className="login-help"><CircleHelp size={15} /> Need access? Contact the MRO administrator.</p>
+        <NavLink className="login-home-link" to="/offline"><Archive size={15} /> Open offline registrations</NavLink>
         <NavLink className="login-home-link" to="/"><ArrowRight size={15} /> Return to the MRO website</NavLink>
       </form>
     </section>
@@ -940,6 +942,7 @@ function MembersPage({ user, showToast }) {
         {can(user, 'members:import') && <label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Preparing…' : 'Review Excel import'}<input type="file" accept=".xlsx,.xls,.csv" onChange={importFile} disabled={importing} /></label>}
         {mayEdit && <label className="button button--secondary file-button"><Archive size={16} />{photoImporting ? 'Matching photos…' : 'Import photo ZIP'}<input type="file" accept=".zip,application/zip" onChange={importPhotos} disabled={photoImporting} /></label>}
         {can(user, 'members:export') && <a className="button button--secondary" href="/api/members/export"><Download size={16} />Export Excel</a>}
+        {mayEdit && <NavLink className="button button--secondary" to="/offline"><Archive size={16} />Offline registrations</NavLink>}
         {mayEdit && <Button icon={Plus} onClick={() => { memberDetailRequestId.current += 1; setOpeningMemberId(null); setEditing({ ...EMPTY_MEMBER }); }}>Add member</Button>}
       </div>
     </section>
@@ -968,7 +971,7 @@ function MembersPage({ user, showToast }) {
   </>;
 }
 
-function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, onDelete }) {
+function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, onDelete, allowPhoto = true, offlineMode = false, saveLabel = 'Save record' }) {
   const [form, setForm] = useState({ ...EMPTY_MEMBER, ...member, dob: dateForInput(member.dob), arrival: dateForInput(member.arrival),
     family_members_data: Array.isArray(member.family_members_data) ? member.family_members_data : [] });
   const [photo, setPhoto] = useState(null);
@@ -997,8 +1000,8 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
 
   return <ModalFrame drawer labelledBy="member-drawer-title" onClose={closeDrawer} busy={saving}>
     <aside className="drawer"><header className="drawer-header"><div><p className="kicker">{member.id ? 'Member record' : 'New record'}</p><h2 id="member-drawer-title">{member.fullname || 'Add member'}</h2>{member.reference && <span className="mono">MRO {member.reference}{member.reference_number ? ` · Ref ${member.reference_number}` : ''}</span>}</div><button onClick={closeDrawer} disabled={saving} aria-label="Close"><X /></button></header>
-      <form className="drawer-form" onSubmit={submit}><FormError message={formError} />
-        <section className="photo-editor"><span className="photo-preview">{member.photo_url ? <img src={member.photo_url} alt={`Current photo for ${member.fullname}`} /> : <UserRound size={42} />}</span><div><strong>Member photo</strong><p>JPG or PNG, up to 4 MB. Linked securely to this member record.</p>{canEdit && <label className="text-link file-button"><Upload size={15} />Choose photo<input type="file" accept="image/jpeg,image/png" onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>}{photo && <small>{photo.name}</small>}</div></section>
+      <form className="drawer-form" onSubmit={submit} autoComplete={offlineMode ? 'off' : undefined}><FormError message={formError} />
+        {allowPhoto && <section className="photo-editor"><span className="photo-preview">{member.photo_url ? <img src={member.photo_url} alt={`Current photo for ${member.fullname}`} /> : <UserRound size={42} />}</span><div><strong>Member photo</strong><p>JPG or PNG, up to 4 MB. Linked securely to this member record.</p>{canEdit && <label className="text-link file-button"><Upload size={15} />Choose photo<input type="file" accept="image/jpeg,image/png" onChange={e => setPhoto(e.target.files?.[0] || null)} /></label>}{photo && <small>{photo.name}</small>}</div></section>}
         <FormSection title="Core identity"><div className="form-grid">
           <Field label="MRO status number" required><input value={form.reference} onChange={e => set('reference', e.target.value)} required disabled={!canEdit} /></Field>
           <Field label="Reference Number"><input value={form.reference_number || ''} onChange={e => set('reference_number', e.target.value)} disabled={!canEdit} placeholder="Reference shown on printed form…" /></Field>
@@ -1042,7 +1045,7 @@ function MemberDrawer({ member, canEdit, canPrint, canDelete, onClose, onSave, o
           </div>)}
           {canEdit && <Button type="button" variant="secondary" icon={Plus} disabled={form.family_members_data.length >= 20} onClick={addRelative}>Add family member</Button>}
         </FormSection>
-        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" disabled={saving} onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={closeDrawer} disabled={saving}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview the last saved form; save any edits first' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview saved form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save record'}</Button>}</footer>
+        <footer className="drawer-actions">{canDelete && member.id && <Button type="button" variant="danger" icon={Trash2} className="drawer-delete-action" disabled={saving} onClick={() => onDelete(member)}>Delete member</Button>}<Button type="button" variant="secondary" onClick={closeDrawer} disabled={saving}>Cancel</Button>{canPrint && member.id && <Button type="button" variant="secondary" icon={Printer} disabled={!member.reference_number} title={member.reference_number ? 'Preview the last saved form; save any edits first' : 'Save a Reference Number before printing'} onClick={() => window.open(`/api/members/${member.id}/print`, '_blank')}>Preview saved form</Button>}{canEdit && <Button type="submit" disabled={saving}>{saving ? 'Saving…' : saveLabel}</Button>}</footer>
       </form>
     </aside>
   </ModalFrame>;
@@ -1416,6 +1419,7 @@ export default function App() {
       <Route path="/faq" element={<FaqPage session={session} />} />
       <Route path="/login" element={session ? <Navigate to={session.must_change_password ? '/change-password' : '/app'} replace /> : <LoginPage onLogin={setSession} />} />
       <Route path="/change-password" element={!session ? <Navigate to="/login" replace /> : session.must_change_password ? <FirstLoginPasswordPage user={session} onChanged={setSession} onLogout={logout} /> : <Navigate to="/app" replace />} />
+      <Route path="/offline" element={<OfflinePage session={session} showToast={showToast} MemberDrawer={MemberDrawer} emptyMember={EMPTY_MEMBER} />} />
       <Route path="/app" element={!session ? <Navigate to="/login" replace /> : session.must_change_password ? <Navigate to="/change-password" replace /> : <AppShell user={session} onLogout={logout}><Outlet /></AppShell>}>
         <Route index element={<DashboardPage user={session} showToast={showToast} />} />
         <Route path="admin" element={can(session, 'users:manage') ? <AdminDashboardPage user={session} showToast={showToast} /> : <Navigate to="/app" replace />} />

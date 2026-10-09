@@ -102,6 +102,16 @@ Finance Officers, the Chair Person and Administrators can open **Finance records
 
 The available roles are Admin, Chair Person, Secretary, HR, Card Printing Staff, Data Management Staff and Finance Officer. Secretary access is read/print only for member records. HR manages employment profiles such as full-time, part-time, volunteer and contract staff. Admin and Chair Person can access the organization KPI dashboard. Every account created with a temporary password is held at a mandatory password-change screen on first sign-in. Signed-in staff can later update their own password from **Profile & access**; the current session stays active and other sessions are ended. Administrators can edit a staff member’s name, email, role and active status, or delete staff access without erasing historical attendance or audit records. Deactivation immediately ends that account’s sessions; the signed-in account and the last active administrator remain protected.
 
+## Offline field registration
+
+Staff with permission to edit member records can open **Offline registrations** from the member page. While online, each staff member prepares an encrypted vault on the device with an offline passphrase of at least 16 characters. After the page reports that offline access is ready, they can open `/offline` without internet and save new member registrations without photos. Existing records, photos, printing and other staff operations still require the server.
+
+The browser stores queued registrations encrypted with AES-GCM in IndexedDB. It stores no login token or passphrase. On a shared device, each staff account has a separate vault; staff should also use separate operating-system or browser profiles where possible. The offline passphrase cannot be recovered. Clearing browser data, losing the device, or forgetting the passphrase can destroy unsynced records. Account deactivation cannot revoke access to an already unlocked offline vault until that device reconnects; secure the device and its passphrase.
+
+When the page is open, the vault is unlocked and the device reconnects, it attempts to sync automatically. The same authorized staff account must have a valid server session. Close the queue only after it reports zero pending records. Browser background sync is not guaranteed, so a closed page must be reopened and unlocked. A duplicate MRO status or reference number stays in the queue for review instead of being silently overwritten. The server uses each queued operation ID to make retries safe after an uncertain connection failure.
+
+Offline access requires HTTPS (or localhost) and a browser that supports service workers, IndexedDB and Web Crypto. Test the workflow on each field device before relying on it. The service worker caches only the public app shell and assets; it does not cache API responses or member photos.
+
 ## Production
 
 ```bash

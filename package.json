@@ -6,7 +6,7 @@
         "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
         "dev:client": "vite",
         "dev:server": "NODE_ENV=development node --watch app-server.js",
-        "build": "vite build",
+        "build": "vite build && node scripts/write-service-worker.js",
         "test": "node --test tests/*.test.js",
         "start": "node app-server.js",
         "db:migrate:sqlite": "node scripts/migrate-sqlite-to-postgres.js",
