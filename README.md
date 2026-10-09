@@ -111,6 +111,17 @@ NODE_ENV=production npm start
 
 The Express server serves the built React application and API from one Node.js process. PostgreSQL can run as a normal operating-system service on the server or through a managed PostgreSQL provider. Set a production `DATABASE_URL`, a strong initial administrator password and `DATABASE_SSL=true` when required by the provider. TLS connections enabled with `DATABASE_SSL=true` verify both the server certificate and hostname. If the provider uses a private certificate authority, add its CA file through the `sslrootcert` parameter in `DATABASE_URL`; certificate verification is never disabled by this setting. PostgreSQL sessions use `Asia/Kuala_Lumpur` so date and month boundaries agree with attendance and reports.
 
+For a smaller production installation, install all dependencies, build the client, then remove development-only packages before starting the server:
+
+```bash
+npm ci
+npm run build
+npm prune --omit=dev
+NODE_ENV=production npm start
+```
+
+Run `npm ci` again before the next build. The Google Sheets utility dependencies are development-only; the active server and built client do not load them.
+
 The initial account variables are used only when the PostgreSQL `users` table is empty.
 
 Use a unique initial password; no built-in password is supplied. When a reverse proxy terminates HTTPS, set `APP_ORIGIN` to the exact public origin (for example `https://registry.example.org`) and `TRUST_PROXY` only to the proxy's trusted address/subnet. The client sends `X-MRO-Request: 1` on mutations; other API clients must do the same. Cross-origin mutations are rejected. Production cookies require HTTPS. Chromium must run with its sandbox supported by the deployment environment.

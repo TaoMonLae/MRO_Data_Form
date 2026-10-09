@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity, Archive, ArrowRight, BarChart3, Bell, BookOpen, BriefcaseBusiness,
@@ -9,7 +9,11 @@ import {
   Sparkles, Sun, Trash2, Upload, UserCog, UserRound, Users, Workflow, X, CheckCircle2, AlertTriangle
 } from 'lucide-react';
 import { api } from './api';
-import Threads from './components/reactbits/Threads';
+const LazyThreads = lazy(() => import('./components/reactbits/Threads'));
+
+function Threads(props) {
+  return <Suspense fallback={null}><LazyThreads {...props} /></Suspense>;
+}
 
 const ROLE_LABELS = {
   admin: 'Admin',
@@ -823,6 +827,7 @@ function MembersPage({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [editing, setEditing] = useState(null);
+  const [openingMemberId, setOpeningMemberId] = useState(null);
   const [importing, setImporting] = useState(false);
   const [photoImporting, setPhotoImporting] = useState(false);
   const [importPreview, setImportPreview] = useState(null);
@@ -832,9 +837,30 @@ function MembersPage({ user, showToast }) {
   const [deleteError, setDeleteError] = useState('');
   const deletePending = useRef(false);
   const memberRequestId = useRef(0);
+  const memberDetailRequestId = useRef(0);
+  const linkedMemberId = useRef('');
   const mayEdit = can(user, 'members:edit');
   const mayPrint = can(user, 'print:forms');
   const mayDelete = user.role === 'admin';
+
+  const openMember = useCallback(async id => {
+    const requestId = ++memberDetailRequestId.current;
+    setOpeningMemberId(String(id));
+    try {
+      const result = await api(`/api/members/${encodeURIComponent(id)}`);
+      if (requestId === memberDetailRequestId.current) setEditing(result.member);
+    } catch (error) {
+      if (requestId === memberDetailRequestId.current) showToast(error.message, 'error');
+    } finally {
+      if (requestId === memberDetailRequestId.current) setOpeningMemberId(null);
+    }
+  }, [showToast]);
+
+  useEffect(() => {
+    const openId = new URLSearchParams(location.search).get('open') || '';
+    if (!openId) { linkedMemberId.current = ''; return; }
+    if (linkedMemberId.current !== openId) { linkedMemberId.current = openId; openMember(openId); }
+  }, [location.search, openMember]);
 
   const load = useCallback(async () => {
     const requestId = ++memberRequestId.current;
@@ -844,16 +870,15 @@ function MembersPage({ user, showToast }) {
       const data = await api(`/api/members?${params}`);
       if (requestId !== memberRequestId.current) return;
       setRows(data.records);
-      const openId = new URLSearchParams(location.search).get('open');
-      if (openId) setEditing(current => current || data.records.find(row => String(row.id) === openId) || null);
     } catch (error) {
       if (requestId === memberRequestId.current) { setLoadError(error.message); showToast(error.message, 'error'); }
     } finally { if (requestId === memberRequestId.current) setLoading(false); }
-  }, [query, photoFilter, location.search, showToast]);
+  }, [query, photoFilter, showToast]);
   useEffect(() => {
     const timer = setTimeout(load, 180);
     return () => { clearTimeout(timer); memberRequestId.current += 1; };
   }, [load]);
+  useEffect(() => () => { memberDetailRequestId.current += 1; linkedMemberId.current = ''; }, []);
 
   async function save(formData, id) {
     try {
@@ -887,6 +912,8 @@ function MembersPage({ user, showToast }) {
   }
 
   function requestDelete(member) {
+    memberDetailRequestId.current += 1;
+    setOpeningMemberId(null);
     setEditing(null); setPendingDelete(member); setDeleteConfirmation(''); setDeleteError('');
   }
 
@@ -913,7 +940,7 @@ function MembersPage({ user, showToast }) {
         {can(user, 'members:import') && <label className="button button--secondary file-button"><Upload size={16} />{importing ? 'Preparing…' : 'Review Excel import'}<input type="file" accept=".xlsx,.xls,.csv" onChange={importFile} disabled={importing} /></label>}
         {mayEdit && <label className="button button--secondary file-button"><Archive size={16} />{photoImporting ? 'Matching photos…' : 'Import photo ZIP'}<input type="file" accept=".zip,application/zip" onChange={importPhotos} disabled={photoImporting} /></label>}
         {can(user, 'members:export') && <a className="button button--secondary" href="/api/members/export"><Download size={16} />Export Excel</a>}
-        {mayEdit && <Button icon={Plus} onClick={() => setEditing({ ...EMPTY_MEMBER })}>Add member</Button>}
+        {mayEdit && <Button icon={Plus} onClick={() => { memberDetailRequestId.current += 1; setOpeningMemberId(null); setEditing({ ...EMPTY_MEMBER }); }}>Add member</Button>}
       </div>
     </section>
     <section className="panel records-panel">
@@ -925,17 +952,17 @@ function MembersPage({ user, showToast }) {
       <div className="table-scroll">
         <table className="data-table"><thead><tr><th>Member</th><th>MRO status no.</th><th>Reference no.</th><th>Gender</th><th>Date of birth</th><th>Phone</th><th>Photo</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{rows.map(row => <tr key={row.id}>
-            <td><button className="member-cell" onClick={() => setEditing(row)}><span className="member-avatar">{row.photo_url ? <img src={row.photo_url} alt="" /> : initials(row.fullname)}</span><span><strong>{row.fullname}</strong><small>{row.email || 'No email'}</small></span></button></td>
+            <td><button className="member-cell" onClick={() => openMember(row.id)} disabled={openingMemberId === String(row.id)}><span className="member-avatar">{row.photo_url ? <img src={row.photo_url} alt="" loading="lazy" decoding="async" /> : initials(row.fullname)}</span><span><strong>{row.fullname}</strong><small>{row.email || 'No email'}</small></span></button></td>
             <td><span className="mono">{row.reference}</span></td><td><span className="mono">{row.reference_number || '—'}</span></td><td>{row.gender || '—'}</td><td>{formatDate(row.dob)}</td><td>{row.phone || '—'}</td>
             <td>{row.photo_url ? <StatusBadge tone="success">Ready</StatusBadge> : <StatusBadge tone="warning">Missing</StatusBadge>}</td>
-            <td><div className="row-actions">{mayPrint && <button disabled={!row.reference_number} title={row.reference_number ? 'Preview form' : 'Add a Reference Number before printing'} onClick={() => window.open(`/api/members/${row.id}/print`, '_blank')} aria-label={`Print form for ${row.fullname}`}><Printer size={17} /></button>}{mayEdit && <button onClick={() => setEditing(row)} aria-label={`Edit ${row.fullname}`}><Pencil size={17} /></button>}{mayDelete && <button className="row-action--danger" onClick={() => requestDelete(row)} title={`Delete ${row.fullname}`} aria-label={`Delete ${row.fullname}`}><Trash2 size={17} /></button>}</div></td>
+            <td><div className="row-actions">{mayPrint && <button disabled={!row.reference_number} title={row.reference_number ? 'Preview form' : 'Add a Reference Number before printing'} onClick={() => window.open(`/api/members/${row.id}/print`, '_blank')} aria-label={`Print form for ${row.fullname}`}><Printer size={17} /></button>}{mayEdit && <button onClick={() => openMember(row.id)} disabled={openingMemberId === String(row.id)} aria-label={`Edit ${row.fullname}`}><Pencil size={17} /></button>}{mayDelete && <button className="row-action--danger" onClick={() => requestDelete(row)} title={`Delete ${row.fullname}`} aria-label={`Delete ${row.fullname}`}><Trash2 size={17} /></button>}</div></td>
           </tr>)}</tbody></table>
         {!loading && loadError && <PageState title="Member records unavailable" message={loadError} onRetry={load} />}
         {!loading && !loadError && !rows.length && <EmptyState icon={Search} title="No matching records">Try a different search or photo filter.</EmptyState>}
         {loading && <div className="loading-row"><RefreshCw className="spin" size={18} />Loading records…</div>}
       </div>
     </section>
-    {editing && <MemberDrawer member={editing} canEdit={mayEdit} canPrint={mayPrint} canDelete={mayDelete} onClose={() => setEditing(null)} onSave={save} onDelete={requestDelete} />}
+    {editing && <MemberDrawer member={editing} canEdit={mayEdit} canPrint={mayPrint} canDelete={mayDelete} onClose={() => { memberDetailRequestId.current += 1; setOpeningMemberId(null); setEditing(null); }} onSave={save} onDelete={requestDelete} />}
     {importPreview && <ImportReviewModal preview={importPreview} committing={importing} onClose={() => setImportPreview(null)} onCommit={commitImport} />}
     {pendingDelete && <ModalFrame labelledBy="delete-member-title" onClose={closeDelete} busy={deleting}><section className="modal-card destructive-dialog member-delete-dialog"><header><div><span className="destructive-dialog__icon"><Trash2 /></span><p className="kicker">Permanent member deletion</p><h2 id="delete-member-title">Delete this member record?</h2></div><button type="button" onClick={closeDelete} disabled={deleting} aria-label="Close"><X /></button></header><FormError message={deleteError} /><p>This cannot be undone. The registry data and uploaded member photo will be permanently removed. A minimal audit event will remain without the member’s name or reference.</p><div className="destructive-dialog__identity"><span className="member-avatar">{pendingDelete.photo_url ? <img src={pendingDelete.photo_url} alt="" /> : initials(pendingDelete.fullname)}</span><span><strong>{pendingDelete.fullname}</strong><small>MRO {pendingDelete.reference}{pendingDelete.reference_number ? ` · Ref ${pendingDelete.reference_number}` : ''}</small></span></div><Field label={<>Type MRO Status <strong className="mono">{pendingDelete.reference}</strong> to confirm</>}><input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} autoComplete="off" disabled={deleting} /></Field><footer><Button type="button" variant="secondary" onClick={closeDelete} disabled={deleting}>Cancel</Button><Button type="button" variant="danger" icon={Trash2} disabled={deleting || deleteConfirmation.trim().toLowerCase() !== String(pendingDelete.reference).trim().toLowerCase()} onClick={deleteMember}>{deleting ? 'Deleting member…' : 'Permanently delete member'}</Button></footer></section></ModalFrame>}
   </>;

@@ -9,6 +9,16 @@ function validIsoDate(value) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : null;
 }
 
+function monthRange(value) {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(value ?? ''));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (year < 1 || year > 9998) return null;
+  const next = month === 12 ? `${String(year + 1).padStart(4, '0')}-01` : `${match[1]}-${String(month + 1).padStart(2, '0')}`;
+  return { start: `${value}-01`, end: `${next}-01` };
+}
+
 function money(value) {
   let text = String(value ?? '').trim();
   if (!text) return 0;
@@ -35,4 +45,4 @@ function importNetAmount(value, amount, deduction) {
   return value == null || String(value).trim() === '' ? money(amount - deduction) : money(value);
 }
 
-module.exports = { invalid, validIsoDate, money, count, importNetAmount };
+module.exports = { invalid, validIsoDate, monthRange, money, count, importNetAmount };

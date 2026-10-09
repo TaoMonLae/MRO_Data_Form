@@ -13,19 +13,16 @@
         "admin:ensure": "node scripts/ensure-admin.js"
     },
     "dependencies": {
-        "@google-cloud/local-auth": "^3.0.1",
         "dotenv": "^16.6.1",
         "exceljs": "^4.4.0",
         "express": "^4.22.2",
         "express-validator": "^7.3.2",
-        "googleapis": "^176.0.0",
         "lucide-react": "^0.468.0",
         "morgan": "^1.11.0",
         "multer": "^2.2.0",
         "ogl": "^1.0.11",
         "pg": "^8.23.0",
         "puppeteer": "^25.9.0",
-        "qrcode": "^1.5.4",
         "react": "^19.1.1",
         "react-dom": "^19.1.1",
         "react-router-dom": "^7.8.2",
@@ -36,8 +33,10 @@
         "gaxios": { "uuid": "^11.1.1" }
     },
     "devDependencies": {
+        "@google-cloud/local-auth": "^3.0.1",
         "@vitejs/plugin-react": "^5.0.2",
         "concurrently": "^9.2.1",
+        "googleapis": "^176.0.0",
         "sqlite3": "^6.0.1",
         "vite": "^7.1.3"
     }

@@ -9,7 +9,7 @@ const puppeteer = require('puppeteer');
 const ExcelJS = require('exceljs');
 const unzipper = require('unzipper');
 const morgan = require('morgan');
-const { invalid, validIsoDate, money, count: cardCount, importNetAmount } = require('./validation');
+const { invalid, validIsoDate, monthRange, money, count: cardCount, importNetAmount } = require('./validation');
 require('dotenv').config();
 const { run, get, all, transaction, initializeDatabase, closeDatabase } = require('./database');
 const { parseCookies, hashPassword, verifyPassword, protectMutation, createRateLimiter, accountCapabilities } = require('./security');
@@ -87,7 +87,9 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '200kb' }));
 // Serve only the explicitly public brand assets; never expose public/uploads
 // through an alternate /assets path or a URL-encoded traversal.
-app.use('/assets', express.static(path.join(ROOT, 'dist', 'assets'), { maxAge: IS_PRODUCTION ? '1d' : 0, index: false, dotfiles: 'deny' }));
+app.use('/assets', express.static(path.join(ROOT, 'dist', 'assets'), {
+  maxAge: IS_PRODUCTION ? '1y' : 0, immutable: IS_PRODUCTION, index: false, dotfiles: 'deny'
+}));
 app.get('/assets/:name', (req, res) => {
   if (!['mro-logo.png', 'logo.png', 'left-logo.png', 'unLogo.png'].includes(req.params.name)) return res.sendStatus(404);
   return res.sendFile(req.params.name, { root: path.join(ROOT, 'public'), maxAge: IS_PRODUCTION ? '1d' : 0 });
@@ -180,7 +182,12 @@ function photoUrl(photoPath) {
 
 function memberPayload(row) {
   if (!row) return null;
-  return { ...row, dob: toIsoDate(row.dob), arrival: toIsoDate(row.arrival), photo_url: photoUrl(row.photo_path) };
+  const { photo_path, ...member } = row;
+  return { ...member, dob: toIsoDate(row.dob), arrival: toIsoDate(row.arrival), photo_url: photoUrl(photo_path) };
+}
+
+function memberListPayload({ photo_path, ...row }) {
+  return { ...row, dob: toIsoDate(row.dob), photo_url: photoUrl(photo_path) };
 }
 
 async function geofenceSettings() {
@@ -540,8 +547,17 @@ app.get('/api/members', ...requirePermission('members:view'), async (req, res, n
     const params = [query, query, query, query, query];
     if (req.query.photo === 'ready') conditions.push("photo_path IS NOT NULL AND photo_path != ''");
     if (req.query.photo === 'missing') conditions.push("(photo_path IS NULL OR photo_path = '')");
-    const rows = await all(`SELECT * FROM submissions WHERE ${conditions.join(' AND ')} ORDER BY id DESC LIMIT 500`, params);
-    res.json({ records: rows.map(memberPayload) });
+    const rows = await all(`SELECT id, reference, reference_number, fullname, gender, dob, email, phone, photo_path
+      FROM submissions WHERE ${conditions.join(' AND ')} ORDER BY id DESC LIMIT 500`, params);
+    res.json({ records: rows.map(memberListPayload) });
+  } catch (error) { next(error); }
+});
+
+app.get('/api/members/:id', ...requirePermission('members:view'), async (req, res, next) => {
+  try {
+    const member = await get('SELECT * FROM submissions WHERE id = ?', [req.params.id]);
+    if (!member) return res.status(404).json({ error: 'Member record not found.' });
+    res.json({ member: memberPayload(member) });
   } catch (error) { next(error); }
 });
 
@@ -1044,16 +1060,17 @@ function cardingValues(body) {
 
 app.get('/api/carding', ...requirePermission('carding:view'), async (req, res, next) => {
   try {
-    const month = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : malaysiaDate().slice(0, 7);
+    const month = monthRange(req.query.month) ? String(req.query.month) : malaysiaDate().slice(0, 7);
+    const range = monthRange(month);
     const records = await all(`SELECT carding_records.*, users.name AS updated_by_name FROM carding_records
       LEFT JOIN users ON users.id = carding_records.updated_by
-      WHERE to_char(record_date, 'YYYY-MM') = ? ORDER BY record_date DESC, carding_records.id DESC LIMIT 1000`, [month]);
+      WHERE record_date >= ? AND record_date < ? ORDER BY record_date DESC, carding_records.id DESC LIMIT 1000`, [range.start, range.end]);
     const summary = await get(`SELECT COUNT(*)::int AS entries,
       COALESCE(SUM(paid_cards), 0)::int AS "paidCards", COALESCE(SUM(unpaid_cards), 0)::int AS "unpaidCards",
       ROUND(COALESCE(SUM(net_amount) FILTER (WHERE category != 'expense'), 0), 2) AS income,
       ROUND(ABS(COALESCE(SUM(net_amount) FILTER (WHERE category = 'expense'), 0)), 2) AS expenses,
       ROUND(COALESCE(SUM(net_amount), 0), 2) AS net
-      FROM carding_records WHERE to_char(record_date, 'YYYY-MM') = ?`, [month]);
+      FROM carding_records WHERE record_date >= ? AND record_date < ?`, [range.start, range.end]);
     res.json({ month, records, summary });
   } catch (error) { next(error); }
 });
@@ -1200,7 +1217,7 @@ app.get('/api/finance', ...requirePermission('finance:view'), async (req, res, n
     const trend = await all(`WITH months AS (
         SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS month
       ) SELECT to_char(month, 'Mon') AS label, ROUND(COALESCE(SUM(net_amount), 0), 2) AS value
-      FROM months LEFT JOIN finance_records ON date_trunc('month', payment_date)::date = months.month
+      FROM months LEFT JOIN finance_records ON payment_date >= months.month AND payment_date < months.month + INTERVAL '1 month'
       GROUP BY month ORDER BY month`);
     const methods = await all(`SELECT payment_method AS label, COUNT(*)::int AS value
       FROM finance_records GROUP BY payment_method ORDER BY value DESC, label`);
@@ -1456,7 +1473,7 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not foun
 
 if (HAS_CLIENT_BUILD) {
   app.use(express.static(path.join(ROOT, 'dist'), { index: false }));
-  app.get('*', (_req, res) => res.sendFile(path.join(ROOT, 'dist', 'index.html')));
+  app.get('*', (_req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(ROOT, 'dist', 'index.html')));
 } else {
   app.get('/', (_req, res) => res.type('text').send('MRO API is running. Open http://localhost:5173 for the React app.'));
 }

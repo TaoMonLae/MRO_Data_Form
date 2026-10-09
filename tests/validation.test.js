@@ -1,10 +1,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validIsoDate, money, count, importNetAmount } = require('../validation');
+const { validIsoDate, monthRange, money, count, importNetAmount } = require('../validation');
 
 test('calendar validation rejects impossible dates while retaining leap days', () => {
   assert.equal(validIsoDate('2024-02-29'), '2024-02-29');
   for (const value of ['2025-02-29', '2026-04-31', '2026-13-01', '0000-01-01', '2026-01-01junk']) assert.equal(validIsoDate(value), null);
+});
+
+test('monthly date ranges include December rollover and reject invalid months', () => {
+  assert.deepEqual(monthRange('2026-10'), { start: '2026-10-01', end: '2026-11-01' });
+  assert.deepEqual(monthRange('2026-12'), { start: '2026-12-01', end: '2027-01-01' });
+  assert.equal(monthRange('2026-13'), null);
 });
 
 test('money parsing preserves formatted values and refuses silent corruption', () => {
