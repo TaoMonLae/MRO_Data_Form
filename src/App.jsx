@@ -682,15 +682,54 @@ function AreaTrendChart({ data = [], label = 'Trend during the last six months' 
   </div>;
 }
 
+function OverviewTrendChart({ data = [] }) {
+  const [activeIndex, setActiveIndex] = useState(null);
+  const values = data.map(item => Math.max(0, Number(item.value) || 0));
+  const ceiling = Math.max(1, Math.ceil(Math.max(...values, 0) / 4) * 4);
+  const width = 720;
+  const height = 252;
+  const left = 34;
+  const right = 16;
+  const top = 24;
+  const bottom = 18;
+  const baseline = height - bottom;
+  const points = data.map((item, index) => ({
+    label: item.label,
+    value: values[index],
+    x: data.length === 1 ? width / 2 : left + index * (width - left - right) / (data.length - 1),
+    y: top + (1 - values[index] / ceiling) * (baseline - top)
+  }));
+  const selectedIndex = activeIndex == null || activeIndex >= points.length ? points.length - 1 : activeIndex;
+  const selected = points[selectedIndex];
+  if (!selected) return <EmptyState title="No registry trend yet">New member records will appear here once available.</EmptyState>;
+  const line = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ');
+  const area = `${line} L ${points[points.length - 1].x} ${baseline} L ${points[0].x} ${baseline} Z`;
+  return <div className="overview-trend">
+    <div className="overview-trend__summary" aria-live="polite"><strong>{selected.value}</strong><span>new records in {selected.label}</span></div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`New member records by month. ${points.map(point => `${point.label}: ${point.value}`).join(', ')}`}>
+      <defs><linearGradient id="overviewRegistryArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#d9231e" stopOpacity=".2" /><stop offset="1" stopColor="#d9231e" stopOpacity="0" /></linearGradient></defs>
+      {[0, 1, 2, 3, 4].map(index => <line key={index} className="overview-trend__grid" x1={left} x2={width - right} y1={top + index * (baseline - top) / 4} y2={top + index * (baseline - top) / 4} />)}
+      <path d={area} fill="url(#overviewRegistryArea)" />
+      <path className="overview-trend__line" d={line} />
+      <line className="overview-trend__guide" x1={selected.x} x2={selected.x} y1={selected.y} y2={baseline} />
+      {points.map((point, index) => <circle key={`${point.label}-${index}`} className={`overview-trend__dot${index === selectedIndex ? ' is-active' : ''}`} cx={point.x} cy={point.y} r={index === selectedIndex ? 6 : 4} />)}
+    </svg>
+    <div className="overview-trend__periods" aria-label="Inspect monthly registry totals">{points.map((point, index) => <button type="button" key={`${point.label}-${index}`} className={index === selectedIndex ? 'is-active' : ''} onFocus={() => setActiveIndex(index)} onMouseEnter={() => setActiveIndex(index)} onClick={() => setActiveIndex(index)} aria-label={`${point.label}: ${point.value} new member records`} aria-pressed={index === selectedIndex}>{point.label}</button>)}</div>
+  </div>;
+}
+
 function GenderBreakdown({ data = [] }) {
+  const [activeIndex, setActiveIndex] = useState(null);
   const total = data.reduce((sum, item) => sum + Number(item.value || 0), 0);
   const colors = ['#d9231e', '#d4ad19', '#193448', '#6e7f8a', '#a5b0b7'];
+  const selected = activeIndex == null ? null : data[activeIndex];
   let offset = 0;
-  return <div className="breakdown-chart"><svg viewBox="0 0 160 160" role="img" aria-label="Member gender breakdown">
+  if (!total) return <EmptyState title="No identity data yet">Gender totals will appear when member records are added.</EmptyState>;
+  return <div className="breakdown-chart"><svg viewBox="0 0 160 160" role="img" aria-label={`Member gender breakdown. ${data.map(item => `${item.label}: ${item.value}`).join(', ')}`}>
     <circle className="donut-track" cx="80" cy="80" r="54" />
-    {data.map((item, index) => { const amount = total ? Number(item.value) / total * 339.292 : 0; const element = <circle key={item.label} className="donut-segment" cx="80" cy="80" r="54" stroke={colors[index % colors.length]} strokeDasharray={`${amount} ${339.292 - amount}`} strokeDashoffset={-offset} />; offset += amount; return element; })}
-    <text x="80" y="77" textAnchor="middle" className="donut-total">{total}</text><text x="80" y="96" textAnchor="middle" className="donut-caption">members</text>
-  </svg><div className="breakdown-legend">{data.map((item, index) => <div key={item.label}><span style={{ background: colors[index % colors.length] }} /><strong>{item.label}</strong><small>{item.value}</small></div>)}</div></div>;
+    {data.map((item, index) => { const amount = Number(item.value) / total * 339.292; const element = <circle key={item.label} className={`donut-segment ${activeIndex === index ? 'is-active' : ''}`} cx="80" cy="80" r="54" stroke={colors[index % colors.length]} strokeDasharray={`${amount} ${339.292 - amount}`} strokeDashoffset={-offset} />; offset += amount; return element; })}
+    <text x="80" y="77" textAnchor="middle" className="donut-total">{selected ? selected.value : total}</text><text x="80" y="96" textAnchor="middle" className="donut-caption">{selected ? selected.label : 'members'}</text>
+  </svg><div className="breakdown-legend" aria-label="Select a gender category">{data.map((item, index) => <button type="button" key={item.label} className={activeIndex === index ? 'is-active' : ''} onClick={() => setActiveIndex(activeIndex === index ? null : index)} aria-pressed={activeIndex === index}><span style={{ background: colors[index % colors.length] }} /><strong>{item.label}</strong><small>{item.value} <em>{Math.round(Number(item.value) / total * 100)}%</em></small></button>)}</div></div>;
 }
 
 function BreakdownLedger({ groups = [] }) {
@@ -712,11 +751,13 @@ function KpiLedger({ stats, overview }) {
     { label: 'Workforce participation', value: Number(workforce.activeStaff) ? Math.round(Number(workforce.activeThisMonth || 0) / Number(workforce.activeStaff) * 100) : 0, suffix: '%', detail: `${workforce.activeThisMonth ?? 0}/${workforce.activeStaff ?? 0} staff recorded time` },
     { label: 'Finance collected', value: formatMoney(overview?.finance?.collected), detail: `${overview?.finance?.transactions ?? 0} payments this month`, money: true }
   ];
-  return <section className="kpi-ledger" aria-label="Administrative key performance indicators"><header><div><p className="kicker">Administrative KPI</p><h3>Operating health</h3></div><span>Current month</span></header><div>{items.map(item => <article key={item.label}><span>{item.label}</span><strong>{item.value}{item.suffix}</strong><small>{item.detail}</small>{!item.money && <i><b style={{ width: `${item.value}%` }} /></i>}</article>)}</div></section>;
+  return <section className="kpi-ledger" aria-label="Administrative key performance indicators"><header><h3>Operating health</h3><span>Current month</span></header><div>{items.map(item => <article key={item.label}><span>{item.label}</span><strong>{item.value}{item.suffix}</strong><small>{item.detail}</small>{!item.money && <i role="meter" aria-label={item.label} aria-valuenow={item.value} aria-valuemin="0" aria-valuemax="100"><b style={{ width: `${Math.min(100, Math.max(0, item.value))}%` }} /></i>}</article>)}</div></section>;
 }
 
 function CoverageChart({ data = [] }) {
-  return <div className="coverage-chart">{data.map(item => { const value = Number(item.value || 0); const total = Number(item.total || 0); const percent = total > 0 ? Math.min(100, Math.max(0, Math.round(value / total * 100))) : 0; return <div key={item.label}><span>{item.label}</span><div><i style={{ transform: `scaleX(${percent / 100})` }} /></div><strong>{value}/{total}</strong></div>; })}</div>;
+  if (!data.length) return <EmptyState title="No attendance data yet">Daily coverage will appear when staff records are available.</EmptyState>;
+  const staffDays = data.reduce((sum, item) => sum + Number(item.value || 0), 0);
+  return <div className="coverage-chart"><p><strong>{staffDays}</strong> staff {staffDays === 1 ? 'check-in' : 'check-ins'} recorded across 7 days</p><div className="coverage-chart__rows">{data.map((item, index) => { const value = Number(item.value || 0); const total = Number(item.total || 0); const percent = total > 0 ? Math.min(100, Math.max(0, value / total * 100)) : 0; return <div key={`${item.label}-${index}`}><span>{item.label}</span><div role="meter" aria-label={`${item.label} staff attendance`} aria-valuenow={value} aria-valuemin="0" aria-valuemax={Math.max(1, total)} aria-valuetext={`${value} of ${total} staff`}><i style={{ width: `${percent}%` }} /></div><strong>{value}<small>/{total}</small></strong></div>; })}</div></div>;
 }
 
 function AdminDashboardPage({ user, showToast }) {
@@ -724,8 +765,9 @@ function AdminDashboardPage({ user, showToast }) {
   if (loading && !data) return <PageState loading title="Operations overview" />;
   if (error && !data) return <PageState title="Operations overview unavailable" message={error} onRetry={reload} />;
   const stats = data?.stats || {};
-  return <>
-    <section className="page-title-row admin-title"><div><p className="kicker">Organization control room</p><h2>Operations overview</h2><p>Registry readiness, attendance coverage and recent work across MRO.</p></div><div className="admin-title__meta"><span className="live-dot live-dot--on" /> Live PostgreSQL data</div></section>
+  return <div className="operations-overview">
+    <section className="page-title-row admin-title"><div><h2>Operations overview</h2><p>Registry readiness, attendance coverage and recent work across MRO.</p></div><div className="admin-title__meta"><span className="live-dot live-dot--on" /> Current registry data <button type="button" onClick={reload} disabled={loading} aria-label="Refresh operations overview" title="Refresh overview"><RefreshCw size={15} className={loading ? 'spin' : ''} /></button></div></section>
+    {error && <p className="overview-refresh-error" role="alert">Could not refresh the overview. Showing the last available figures. <button type="button" onClick={reload}>Try again</button></p>}
     <section className="admin-stat-strip" aria-label="Organization metrics">
       <div><span>Registry</span><strong>{stats.members ?? '—'}</strong><small>{stats.addedThisMonth ?? 0} added this month</small></div>
       <div><span>Print ready</span><strong>{stats.readyToPrint ?? '—'}</strong><small>{stats.missingPhotos ?? 0} photos · {stats.missingReferenceNumbers ?? 0} references missing</small></div>
@@ -734,13 +776,13 @@ function AdminDashboardPage({ user, showToast }) {
     </section>
     <KpiLedger stats={stats} overview={data?.overview} />
     <section className="analytics-layout">
-      <article className="analytics-panel analytics-panel--trend"><header><div><p className="kicker">Registry movement</p><h3>New member records</h3></div><span>Last 6 months</span></header><AreaTrendChart data={data?.charts?.registryTrend} /></article>
-      <article className="analytics-panel"><header><div><p className="kicker">Identity data</p><h3>Gender breakdown</h3></div></header><GenderBreakdown data={data?.charts?.genderBreakdown} /></article>
-      <article className="analytics-panel analytics-panel--demographics"><header><div><p className="kicker">Age & safeguarding</p><h3>Adult and underage breakdown</h3></div><span>Age calculated from date of birth</span></header><BreakdownLedger groups={[{ title: 'Age group', items: data?.charts?.ageBreakdown || [] }, { title: 'Underage gender', items: data?.charts?.underageGender || [] }]} /></article>
-      <article className="analytics-panel analytics-panel--coverage"><header><div><p className="kicker">Workforce coverage</p><h3>Staff attendance</h3></div><span>Last 7 days</span></header><CoverageChart data={data?.charts?.attendanceCoverage} /></article>
-      <article className="analytics-panel analytics-panel--queue"><header><div><p className="kicker">Clearable queue</p><h3>Records needing action</h3></div><NavLink className="text-link" to="/app/members">Open records <ArrowRight size={15} /></NavLink></header><div className="attention-list">{(data?.attention || []).map(item => <NavLink to={`/app/members?open=${item.id}`} className="attention-item" key={item.id}><span className="member-avatar">{item.photo_url ? <img src={item.photo_url} alt="" /> : initials(item.fullname)}</span><span><strong>{item.fullname}</strong><small>{item.reference} · {item.reason}</small></span><StatusBadge tone={item.tone}>{item.label}</StatusBadge><ChevronRight size={16} /></NavLink>)}{data && !data.attention?.length && <EmptyState title="Queue is clear">No member records need immediate attention.</EmptyState>}</div></article>
+      <article className="analytics-panel analytics-panel--trend"><header><h3>New member records</h3><span>Last 6 months</span></header><OverviewTrendChart data={data?.charts?.registryTrend} /></article>
+      <article className="analytics-panel analytics-panel--gender"><header><h3>Gender breakdown</h3><span>All records</span></header><GenderBreakdown data={data?.charts?.genderBreakdown} /></article>
+      <article className="analytics-panel analytics-panel--demographics"><header><h3>Adult and underage</h3><span>Age from date of birth</span></header><BreakdownLedger groups={[{ title: 'Age group', items: data?.charts?.ageBreakdown || [] }, { title: 'Underage gender', items: data?.charts?.underageGender || [] }]} /></article>
+      <article className="analytics-panel analytics-panel--coverage"><header><h3>Staff attendance</h3><span>Last 7 days</span></header><CoverageChart data={data?.charts?.attendanceCoverage} /></article>
+      <article className="analytics-panel analytics-panel--queue"><header><h3>Records needing action</h3><NavLink className="text-link" to="/app/members">Open records <ArrowRight size={15} /></NavLink></header><div className="attention-list">{(data?.attention || []).map(item => <NavLink to={`/app/members?open=${item.id}`} className="attention-item" key={item.id}><span className="member-avatar">{item.photo_url ? <img src={item.photo_url} alt="" /> : initials(item.fullname)}</span><span><strong>{item.fullname}</strong><small>{item.reference} · {item.reason}</small></span><StatusBadge tone={item.tone}>{item.label}</StatusBadge><ChevronRight size={16} /></NavLink>)}{data && !data.attention?.length && <EmptyState title="Queue is clear">No member records need immediate attention.</EmptyState>}</div></article>
     </section>
-  </>;
+  </div>;
 }
 
 function ProfilePage({ user, showToast }) {
