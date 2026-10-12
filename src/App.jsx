@@ -3,7 +3,7 @@ import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } fr
 import {
   Activity, Archive, ArrowRight, BarChart3, Bell, BookOpen, BriefcaseBusiness,
   Building2, CalendarClock, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Database,
-  Download, ExternalLink, FileCheck2, FileDown, FileText, Filter, Globe2, HandHeart,
+  Download, ExternalLink, FileCheck2, FileDown, FileText, Filter,
   HeartHandshake, Home, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Mail, MapPin,
   Menu, Moon, MoreHorizontal, Pencil, Plus, Printer, RefreshCw, Search, Settings, ShieldCheck,
   Sparkles, Sun, Trash2, Upload, UserCog, UserRound, Users, Workflow, X, CheckCircle2, AlertTriangle
@@ -279,7 +279,7 @@ function PublicHeader({ session }) {
 
 function PublicFooter() {
   return <footer className="public-footer">
-    <div className="public-footer__lead"><BrandLockup inverse /><p>Careful records. Accountable access. Dignified member service.</p></div>
+    <div className="public-footer__lead"><BrandLockup inverse /><p>The staff registry of the Mon Refugee Organization, Malaysia.</p></div>
     <div><strong>Organization</strong><NavLink to="/about">About MRO</NavLink><NavLink to="/faq">Frequently asked questions</NavLink></div>
     <div><strong>Staff</strong><NavLink to="/login">Staff portal</NavLink><span>Asia/Kuala_Lumpur</span></div>
     <div className="public-footer__note">
@@ -293,14 +293,13 @@ function PublicFrame({ session, children }) {
   return <div className="public-site"><PublicHeader session={session} />{children}<PublicFooter /></div>;
 }
 
-function LogoMotion() {
-  return <div className="logo-motion" aria-hidden="true">
-    <div className="logo-motion__threads"><Threads color={[1, 0.76, 0.05]} amplitude={0.34} distance={0.16} enableMouseInteraction={false} /></div>
-    <div className="logo-motion__orbit logo-motion__orbit--one" />
-    <div className="logo-motion__orbit logo-motion__orbit--two" />
-    <img className="logo-motion__image" src="/assets/mro-logo.png" alt="" width="920" height="750" />
-    <div className="logo-motion__sweep" />
-  </div>;
+function HeroFlag() {
+  return <>
+    <div className="public-hero__threads" aria-hidden="true"><Threads color={[1, 0.76, 0.05]} amplitude={0.3} distance={0.16} enableMouseInteraction={false} /></div>
+    <figure className="public-hero__flag">
+      <img src="/assets/mro-logo.png" alt="Mon Refugee Organization Malaysia flag: a white star and golden hamsa on red, with the name in Mon and English" width="920" height="750" />
+    </figure>
+  </>;
 }
 
 const FAQ_ITEMS = [
@@ -316,53 +315,50 @@ function LandingPage({ session }) {
   return <PublicFrame session={session}>
     <main>
       <section className="public-hero">
-        <LogoMotion />
+        <HeroFlag />
         <div className="public-hero__content">
-          <p className="public-eyebrow"><span /> MRO Malaysia · Internal operations</p>
-          <h1>Member records that stay ready for the moment they are needed.</h1>
-          <p className="public-hero__lead">One accountable workspace for refugee data keeping, staff attendance and consistent A4 registration-request printing.</p>
-          <div className="public-hero__actions"><NavLink className="public-button public-button--light" to={session ? '/app' : '/login'}>{session ? 'Open workspace' : 'Staff sign in'} <ArrowRight size={17} /></NavLink><NavLink className="public-button public-button--ghost" to="/about">How MRO works</NavLink></div>
-        </div>
-        <div className="public-metric-strip" aria-label="System scope">
-          <div><strong>7</strong><span>Defined staff roles</span></div>
-          <div><strong>A4</strong><span>Print-ready member form</span></div>
-          <div><strong>MYT</strong><span>Malaysia attendance time</span></div>
-          <div><strong>1</strong><span>Auditable source of truth</span></div>
+          <h1>Member records kept accurate, private and ready to print.</h1>
+          <p className="public-hero__lead">This is the staff registry of the Mon Refugee Organization in Malaysia. It holds member records, staff attendance and the A4 registration request form in one place, and it logs every change.</p>
+          <div className="public-hero__actions"><NavLink className="public-button public-button--light" to={session ? '/app' : '/login'}>{session ? 'Open workspace' : 'Staff sign in'} <ArrowRight size={17} /></NavLink><NavLink className="public-button public-button--ghost" to="/about">About MRO</NavLink></div>
         </div>
       </section>
 
-      <section className="public-intro" id="operations">
-        <p className="public-section-index">01 · The operating model</p>
-        <div><h2>From scattered spreadsheets to a controlled member workflow.</h2><p>MRO’s registry keeps the familiar MRO Status number at the centre, then connects the member’s identity, family details, contact information, photo and print history around it.</p></div>
-      </section>
-
-      <section className="workflow-ledger" aria-label="Registry workflow">
-        {[
-          ['01', 'Keep', 'Import existing Excel data or add a member with structured fields and a matching photo.'],
-          ['02', 'Review', 'Search by MRO number, name, email or phone; identify missing photos and incomplete core details.'],
-          ['03', 'Print', 'Preview a consistent A4 registration request and record the print action for accountability.']
-        ].map(([number, title, text], index) => <article key={title} className={index === 1 ? 'workflow-ledger__row workflow-ledger__row--focus' : 'workflow-ledger__row'}><span>{number}</span><h3>{title}</h3><p>{text}</p><ArrowRight aria-hidden="true" /></article>)}
+      <section className="public-section" id="operations">
+        <div className="public-split">
+          <h2>Every record starts from the MRO Status number.</h2>
+          <p>Staff already know members by their MRO Status number, so the registry uses it as the key. Identity, family details, contact information, photo and print history are all linked to it, which keeps records and photos matched.</p>
+        </div>
+        <ol className="workflow-steps" aria-label="How a record moves through the registry">
+          {[
+            ['Add', 'Import an existing Excel or CSV file, or enter a new member with their photo.'],
+            ['Check', 'Search by MRO number, name, email or phone. Missing photos and incomplete details are flagged.'],
+            ['Print', 'Preview the A4 registration request, then print it. Each print is recorded.']
+          ].map(([title, text], index) => <li key={title}><span aria-hidden="true">{index + 1}</span><h3>{title}</h3><p>{text}</p></li>)}
+        </ol>
       </section>
 
       <section className="public-proof">
-        <div className="public-proof__statement"><p className="public-section-index">02 · Built around real MRO work</p><h2>Operational proof, not decorative promises.</h2></div>
+        <h2>What staff can rely on</h2>
         <div className="proof-list">
-          <div><FileCheck2 /><span><strong>Exact-field continuity</strong>Preserves the identifiers and personal fields already used in MRO spreadsheets.</span></div>
-          <div><ShieldCheck /><span><strong>Role boundaries</strong>Editing, printing, importing, exporting and user access are separate permissions.</span></div>
-          <div><Activity /><span><strong>Accountable actions</strong>Changes, imports, exports, sign-ins and prints are recorded with staff context.</span></div>
-          <div><Printer /><span><strong>Print preparation</strong>Photos and missing details are surfaced before a member form is generated.</span></div>
+          <div><FileCheck2 aria-hidden="true" /><span><strong>The same fields as before</strong>The registry keeps the identifiers and personal fields from MRO’s existing spreadsheets.</span></div>
+          <div><ShieldCheck aria-hidden="true" /><span><strong>Access by role</strong>Editing, printing, importing, exporting and account management are separate permissions.</span></div>
+          <div><Activity aria-hidden="true" /><span><strong>A log of every action</strong>Edits, imports, exports, sign-ins and prints are recorded with the staff member who did them.</span></div>
+          <div><Printer aria-hidden="true" /><span><strong>Checked before printing</strong>Missing photos or details are flagged before a member form is generated.</span></div>
         </div>
       </section>
 
-      <section className="public-about-band">
-        <div><p className="public-section-index">03 · About MRO</p><h2>A community organization working with care, continuity and dignity.</h2></div>
-        <div><p>The registry is designed for staff serving Mon refugees in Malaysia. It supports the organization’s administrative work while keeping clear boundaries around sensitive data and UNHCR-related forms.</p><NavLink className="public-text-link" to="/about">Read about the organization <ArrowRight size={16} /></NavLink></div>
+      <section className="public-section public-section--paper">
+        <div className="public-split">
+          <h2>A community organization serving Mon refugees in Malaysia.</h2>
+          <div><p>MRO works with Mon refugees from Myanmar living in Malaysia. This registry handles the record keeping behind that work, and limits sensitive information to the staff who need it.</p><NavLink className="public-text-link" to="/about">Read about MRO <ArrowRight size={16} /></NavLink></div>
+        </div>
       </section>
 
-      <section className="public-faq-preview">
-        <div><p className="public-section-index">04 · Common questions</p><h2>Clear answers before staff enter sensitive information.</h2></div>
-        <div className="faq-list">{FAQ_ITEMS.slice(0, 4).map(([question, answer]) => <details key={question}><summary>{question}<Plus size={18} /></summary><p>{answer}</p></details>)}</div>
-        <NavLink className="public-text-link" to="/faq">View all questions <ArrowRight size={16} /></NavLink>
+      <section className="public-section">
+        <div className="public-split">
+          <div><h2>Common questions</h2><NavLink className="public-text-link" to="/faq">See all questions <ArrowRight size={16} /></NavLink></div>
+          <div className="faq-list">{FAQ_ITEMS.slice(0, 4).map(([question, answer]) => <details key={question}><summary>{question}<Plus size={18} aria-hidden="true" /></summary><p>{answer}</p></details>)}</div>
+        </div>
       </section>
     </main>
   </PublicFrame>;
@@ -370,21 +366,42 @@ function LandingPage({ session }) {
 
 function AboutPage({ session }) {
   return <PublicFrame session={session}><main className="public-inner-page">
-    <section className="public-page-heading"><p className="public-eyebrow"><span /> About the organization</p><h1>Structured support for Mon refugees in Malaysia.</h1><p>MRO’s internal registry gives staff a careful way to maintain member information, prepare forms and make operational responsibility visible.</p></section>
-    <section className="about-manifesto"><p className="public-section-index">Our working principles</p><div><h2>Serve the person, protect the record.</h2><p>Sensitive information should move only where it has a defined purpose. MRO’s workflow combines practical access for authorized staff with search, review, printing and audit controls.</p></div></section>
-    <section className="principle-grid">
-      <article><HandHeart /><h3>Dignity</h3><p>Member details and photos are shown only where they support a real staff task.</p></article>
-      <article><Database /><h3>Continuity</h3><p>Existing spreadsheet fields remain familiar while PostgreSQL becomes the durable source of truth.</p></article>
-      <article><UserCog /><h3>Responsibility</h3><p>Roles define who may edit, print, export or administer accounts.</p></article>
-      <article><Globe2 /><h3>Local context</h3><p>Attendance and operational timestamps follow Asia/Kuala_Lumpur.</p></article>
+    <section className="public-page-heading"><h1>Supporting Mon refugees in Malaysia.</h1><p>The Mon Refugee Organization (MRO) is a community organization based in Kuala Lumpur, working with Mon refugees from Myanmar.</p></section>
+    <section className="public-section">
+      <div className="public-split">
+        <h2>What MRO does</h2>
+        <div>
+          <p>MRO’s work is organised across four departments: card printing, data records, health and education. MRO also runs the Mon Refugee Learning Centre (MRLC), which offers GED and IGCSE-track classes for refugee students aged 14 to 20.</p>
+          <p>This website is the staff registry MRO uses to keep member records and prepare registration request forms.</p>
+        </div>
+      </div>
     </section>
-    <section className="unhcr-context"><div><p className="public-section-index">UNHCR context</p><h2>Clear about what this system is—and what it is not.</h2></div><p>MRO operates under the wider refugee-support context of UNHCR Malaysia and prepares the expected form for members. The application does not claim to be operated, approved or hosted by UNHCR.</p></section>
+    <section className="public-section public-section--rule">
+      <div className="public-split">
+        <h2>Serve the person, protect the record.</h2>
+        <div>
+          <p>Member information is sensitive. The registry gives authorized staff what they need to search, review and print, and keeps a log of who did what.</p>
+          <dl className="principle-list">
+            <div><dt>Dignity</dt><dd>Member details and photos appear only where a staff task needs them.</dd></div>
+            <div><dt>Continuity</dt><dd>Fields from the old spreadsheets carry over unchanged, now kept in one database.</dd></div>
+            <div><dt>Responsibility</dt><dd>Each staff role has set permissions to edit, print, export or manage accounts.</dd></div>
+            <div><dt>Local time</dt><dd>Attendance and timestamps use Malaysia time (Asia/Kuala_Lumpur).</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+    <section className="public-section public-section--paper">
+      <div className="public-split">
+        <h2>This is not a UNHCR system.</h2>
+        <p>MRO works within the wider refugee-support context of UNHCR Malaysia and helps members prepare the forms they need. This registry is MRO’s own internal system. It is not operated, approved or hosted by UNHCR.</p>
+      </div>
+    </section>
   </main></PublicFrame>;
 }
 
 function FaqPage({ session }) {
   return <PublicFrame session={session}><main className="public-inner-page public-faq-page">
-    <section className="public-page-heading"><p className="public-eyebrow"><span /> Frequently asked questions</p><h1>Using the MRO registry responsibly.</h1><p>Practical guidance for staff accounts, imports, member photos, form printing and data protection.</p></section>
+    <section className="public-page-heading"><h1>Using the MRO registry responsibly.</h1><p>Practical guidance for staff accounts, imports, member photos, form printing and data protection.</p></section>
     <section className="faq-list faq-list--large">{FAQ_ITEMS.map(([question, answer], index) => <details key={question}><summary><span>{String(index + 1).padStart(2, '0')}</span>{question}<Plus size={20} /></summary><p>{answer}</p></details>)}</section>
     <section className="faq-contact"><Mail /><div><h2>Need an account or policy answer?</h2><p>Contact the MRO administrator or Chair Person through the organization’s approved staff channel.</p></div></section>
   </main></PublicFrame>;
